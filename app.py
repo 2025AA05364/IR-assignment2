@@ -1,6 +1,6 @@
 """
-IR Assignment 2 – End-to-End Information Retrieval System
-Domain: News Articles
+IR Assignment 2 – Smart End-to-End Information Retrieval System
+Domain: Wikipedia / Web Articles
 Run: streamlit run app.py
 """
 
@@ -25,7 +25,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer, WordNetLemmatizer
-from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.naive_bayes import MultinomialNB
@@ -33,23 +33,24 @@ from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
 
-# ── NLTK downloads (silent) ────────────────────────────────────────────────────
-for pkg in ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger",
-            "punkt_tab"]:
+APP_VERSION = "2.0.0"
+APP_DOMAIN  = "Wikipedia / Web Articles"
+
+for pkg in ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger", "punkt_tab"]:
     try:
         nltk.download(pkg, quiet=True)
     except Exception:
         pass
 
-# ── Persistence paths ──────────────────────────────────────────────────────────
-DATA_DIR = "ir_data"
+# ── Persistence ────────────────────────────────────────────────────────────────
+DATA_DIR     = "ir_data"
 os.makedirs(DATA_DIR, exist_ok=True)
-CORPUS_FILE   = os.path.join(DATA_DIR, "corpus.json")
-INDEX_FILE    = os.path.join(DATA_DIR, "index.pkl")
-META_FILE     = os.path.join(DATA_DIR, "metadata.json")
-RATINGS_FILE  = os.path.join(DATA_DIR, "ratings.json")
+CORPUS_FILE  = os.path.join(DATA_DIR, "corpus.json")
+INDEX_FILE   = os.path.join(DATA_DIR, "index.pkl")
+META_FILE    = os.path.join(DATA_DIR, "metadata.json")
+RATINGS_FILE = os.path.join(DATA_DIR, "ratings.json")
+STATS_FILE   = os.path.join(DATA_DIR, "stats.json")
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
 def load_corpus():
     if os.path.exists(CORPUS_FILE):
         with open(CORPUS_FILE) as f:
@@ -90,9 +91,19 @@ def save_ratings(r):
     with open(RATINGS_FILE, "w") as f:
         json.dump(r, f, indent=2)
 
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        with open(STATS_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_stats(s):
+    with open(STATS_FILE, "w") as f:
+        json.dump(s, f, indent=2)
+
 # ── Text preprocessing ─────────────────────────────────────────────────────────
-STOP = set(stopwords.words("english"))
-stemmer = PorterStemmer()
+STOP       = set(stopwords.words("english"))
+stemmer    = PorterStemmer()
 lemmatizer = WordNetLemmatizer()
 
 def clean_text(text):
@@ -115,22 +126,25 @@ def lemmatize_tokens(tokens):
 def preprocess(text, method="lemmatize"):
     tokens = tokenize(text)
     tokens = remove_stopwords(tokens)
-    if method == "stem":
-        return stem_tokens(tokens)
-    return lemmatize_tokens(tokens)
+    return stem_tokens(tokens) if method == "stem" else lemmatize_tokens(tokens)
 
 def preprocess_str(text, method="lemmatize"):
     return " ".join(preprocess(text, method))
 
 # ── Crawling ───────────────────────────────────────────────────────────────────
-HEADERS = {"User-Agent": "Mozilla/5.0 (IR-Assignment-Bot/1.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (IR-Assignment-Bot/2.0)"}
 
 def crawl(seeds, max_depth=1, max_pages=20):
-    visited_urls = set()
-    seen_hashes  = set()
-    docs = []
-    meta = {}
-    queue = [(url.strip(), 0) for url in seeds if url.strip()]
+    visited_urls  = set()
+    seen_hashes   = set()
+    docs          = []
+    meta          = {}
+    failed        = 0
+    dup_urls      = 0
+    dup_docs      = 0
+    total_size    = 0
+    queue         = [(url.strip(), 0) for url in seeds if url.strip()]
+    crawl_start   = time.time()
 
     progress = st.progress(0)
     status   = st.empty()
@@ -138,38 +152,40 @@ def crawl(seeds, max_depth=1, max_pages=20):
     while queue and len(docs) < max_pages:
         url, depth = queue.pop(0)
         if url in visited_urls:
+            dup_urls += 1
             continue
         visited_urls.add(url)
 
         try:
             resp = requests.get(url, headers=HEADERS, timeout=8)
             if resp.status_code != 200:
+                failed += 1
                 continue
             soup = BeautifulSoup(resp.text, "lxml")
-
-            # Extract text
             for tag in soup(["script", "style", "nav", "footer", "header"]):
                 tag.decompose()
             title = soup.title.string.strip() if soup.title else url
             body  = soup.get_text(separator=" ", strip=True)
             body  = re.sub(r"\s+", " ", body)[:5000]
 
-            # Dedup by content hash
             h = hash(body[:500])
             if h in seen_hashes or len(body) < 100:
+                dup_docs += 1
                 continue
             seen_hashes.add(h)
 
             doc_id = f"doc_{len(docs)}"
+            page_size = len(body.encode("utf-8"))
+            total_size += page_size
             docs.append({"id": doc_id, "url": url, "title": title, "body": body})
             meta[doc_id] = {
                 "url": url, "title": title, "length": len(body),
-                "depth": depth, "crawled_at": time.strftime("%Y-%m-%dT%H:%M:%S")
+                "depth": depth, "size_bytes": page_size,
+                "crawled_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
             status.text(f"Crawled ({len(docs)}/{max_pages}): {title[:60]}")
             progress.progress(len(docs) / max_pages)
 
-            # Enqueue child links
             if depth < max_depth:
                 for a in soup.find_all("a", href=True):
                     link = urljoin(url, a["href"])
@@ -178,18 +194,29 @@ def crawl(seeds, max_depth=1, max_pages=20):
                         queue.append((link, depth + 1))
 
         except Exception:
-            continue
+            failed += 1
 
+    crawl_duration = round(time.time() - crawl_start, 2)
     progress.empty()
     status.empty()
-    return docs, meta
+
+    crawl_summary = {
+        "total_visited": len(visited_urls),
+        "successful": len(docs),
+        "failed": failed,
+        "dup_urls": dup_urls,
+        "dup_docs": dup_docs,
+        "avg_page_size_kb": round(total_size / max(len(docs), 1) / 1024, 2),
+        "crawl_duration_s": crawl_duration,
+        "last_crawl": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    return docs, meta, crawl_summary
 
 # ── Indexing ───────────────────────────────────────────────────────────────────
 def build_inverted_index(docs):
     index = defaultdict(lambda: defaultdict(int))
     for doc in docs:
-        tokens = preprocess(doc["title"] + " " + doc["body"])
-        for tok in tokens:
+        for tok in preprocess(doc["title"] + " " + doc["body"]):
             index[tok][doc["id"]] += 1
     return {k: dict(v) for k, v in index.items()}
 
@@ -199,12 +226,16 @@ def build_tfidf(docs):
     mat = vec.fit_transform(corpus)
     return vec, mat
 
-# ── PageRank ───────────────────────────────────────────────────────────────────
+def index_size_kb():
+    if os.path.exists(INDEX_FILE):
+        return round(os.path.getsize(INDEX_FILE) / 1024, 1)
+    return 0.0
+
+# ── PageRank & HITS ────────────────────────────────────────────────────────────
 def build_pagerank(docs):
     G = nx.DiGraph()
     for d in docs:
         G.add_node(d["id"])
-    # Simulated links: docs that share keywords link to each other
     vec, mat = build_tfidf(docs)
     sim = cosine_similarity(mat)
     for i in range(len(docs)):
@@ -214,7 +245,6 @@ def build_pagerank(docs):
     pr = nx.pagerank(G, alpha=0.85) if G.number_of_edges() > 0 else {d["id"]: 1 / len(docs) for d in docs}
     return pr, G
 
-# ── HITS ──────────────────────────────────────────────────────────────────────
 def compute_hits(G):
     if G.number_of_edges() == 0:
         return {}, {}
@@ -227,33 +257,41 @@ def boolean_search(query, index, docs, op="AND"):
     if not tokens:
         return []
     sets = [set(index.get(t, {}).keys()) for t in tokens]
-    if op == "AND":
-        result = sets[0].intersection(*sets[1:]) if sets else set()
-    else:
-        result = sets[0].union(*sets[1:]) if sets else set()
+    result = sets[0].intersection(*sets[1:]) if op == "AND" else sets[0].union(*sets[1:])
     return [d for d in docs if d["id"] in result]
 
 def tfidf_search(query, docs, vec, mat, top_k=10):
     if not docs:
         return []
-    q_vec = vec.transform([preprocess_str(query)])
-    scores = cosine_similarity(q_vec, mat).flatten()
+    scores = cosine_similarity(vec.transform([preprocess_str(query)]), mat).flatten()
     ranked = np.argsort(scores)[::-1][:top_k]
     return [(docs[i], float(scores[i])) for i in ranked if scores[i] > 0]
 
 def ranked_search(query, docs, vec, mat, pr, top_k=10, alpha=0.5):
     if not docs:
         return []
-    q_vec = vec.transform([preprocess_str(query)])
-    tfidf_scores = cosine_similarity(q_vec, mat).flatten()
-    pr_scores = np.array([pr.get(d["id"], 0) for d in docs])
+    tfidf_scores = cosine_similarity(vec.transform([preprocess_str(query)]), mat).flatten()
+    pr_scores    = np.array([pr.get(d["id"], 0) for d in docs])
     if pr_scores.max() > 0:
         pr_scores = pr_scores / pr_scores.max()
     combined = alpha * tfidf_scores + (1 - alpha) * pr_scores
-    ranked = np.argsort(combined)[::-1][:top_k]
+    ranked   = np.argsort(combined)[::-1][:top_k]
     return [(docs[i], float(combined[i])) for i in ranked if combined[i] > 0]
 
 # ── Recommendations ────────────────────────────────────────────────────────────
+CATEGORIES = {
+    "ML/AI":    ["machine", "learning", "neural", "deep", "model", "algorithm"],
+    "IR/Search":["retrieval", "search", "index", "query", "ranking"],
+    "NLP":      ["language", "text", "nlp", "processing", "corpus"],
+    "Web":      ["web", "internet", "crawl", "page", "link", "network"],
+}
+
+def auto_label(doc):
+    t = (doc["title"] + " " + doc["body"][:200]).lower()
+    scores = {cat: sum(1 for kw in kws if kw in t) for cat, kws in CATEGORIES.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "General"
+
 def content_based_recommend(doc_idx, docs, mat, top_k=5):
     if doc_idx >= mat.shape[0]:
         return []
@@ -265,25 +303,20 @@ def content_based_recommend(doc_idx, docs, mat, top_k=5):
 def collab_recommend(user_id, ratings, docs, mat, top_k=5):
     if not ratings or user_id not in ratings:
         return []
-    # Build user-item matrix from ratings dict {user: {doc_id: score}}
     all_users = list(ratings.keys())
-    all_docs  = list({d["id"] for d in docs})
-    uid_map = {u: i for i, u in enumerate(all_users)}
-    did_map = {d: i for i, d in enumerate(all_docs)}
-
+    all_docs  = [d["id"] for d in docs]
+    uid_map   = {u: i for i, u in enumerate(all_users)}
+    did_map   = {d: i for i, d in enumerate(all_docs)}
     R = np.zeros((len(all_users), len(all_docs)))
     for u, items in ratings.items():
         for d_id, score in items.items():
             if u in uid_map and d_id in did_map:
                 R[uid_map[u], did_map[d_id]] = score
-
     user_vec = R[uid_map[user_id]].reshape(1, -1)
     if user_vec.sum() == 0:
         return []
     user_sims = cosine_similarity(user_vec, R).flatten()
     user_sims[uid_map[user_id]] = 0
-
-    # Weighted predicted scores
     pred = user_sims @ R
     already_rated = set(ratings[user_id].keys())
     ranked_docs = [(all_docs[i], pred[i]) for i in np.argsort(pred)[::-1]
@@ -295,59 +328,121 @@ def collab_recommend(user_id, ratings, docs, mat, top_k=5):
 def compute_metrics(retrieved_ids, relevant_ids, k=10):
     retrieved = list(retrieved_ids)[:k]
     relevant  = set(relevant_ids)
-
-    hits = [1 if r in relevant else 0 for r in retrieved]
+    hits      = [1 if r in relevant else 0 for r in retrieved]
     prec = sum(hits) / len(retrieved) if retrieved else 0
     rec  = sum(hits) / len(relevant)  if relevant  else 0
     f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
-
-    prec_k = sum(hits) / k if k > 0 else 0
-    rec_k  = rec
-
-    # AP
     ap, rel_so_far = 0.0, 0
     for i, h in enumerate(hits):
         if h:
             rel_so_far += 1
             ap += rel_so_far / (i + 1)
-    ap = ap / len(relevant) if relevant else 0
-
-    # MRR
-    mrr = 0.0
-    for i, h in enumerate(hits):
-        if h:
-            mrr = 1 / (i + 1)
-            break
-
-    # NDCG
+    ap   = ap / len(relevant) if relevant else 0
+    mrr  = next((1 / (i + 1) for i, h in enumerate(hits) if h), 0.0)
     dcg  = sum(h / math.log2(i + 2) for i, h in enumerate(hits))
     idcg = sum(1 / math.log2(i + 2) for i in range(min(len(relevant), k)))
     ndcg = dcg / idcg if idcg > 0 else 0
-
     return {"Precision": prec, "Recall": rec, "F1": f1,
-            "Precision@K": prec_k, "Recall@K": rec_k,
+            "Precision@K": sum(hits) / k if k else 0, "Recall@K": rec,
             "AP": ap, "MRR": mrr, "NDCG": ndcg}
 
-# ── Streamlit App ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="IR System – News", layout="wide", page_icon="🔍")
+# ── UI helpers ─────────────────────────────────────────────────────────────────
+def footer():
+    st.markdown("---")
+    st.markdown(
+        f"<div style='text-align:center;color:#94a3b8;font-size:13px;'>"
+        f"🚀 Smart IR System &nbsp;|&nbsp; v{APP_VERSION} &nbsp;|&nbsp; "
+        f"Domain: {APP_DOMAIN} &nbsp;|&nbsp; "
+        f"{time.strftime('%Y-%m-%d %H:%M')}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-# Session-state init
-for key, default in [
-    ("corpus", load_corpus()),
-    ("index",  load_index()),
-    ("tfidf_vec", None),
-    ("tfidf_mat", None),
-    ("pagerank",  {}),
-    ("hits_hubs", {}),
-    ("hits_auth", {}),
-    ("link_graph", None),
-    ("ratings", load_ratings()),
-    ("eval_results", []),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+def rec_card(rank, doc, score, category=""):
+    snippet = doc["body"][:200].replace("\n", " ") + "…"
+    cat_badge = f"<span style='background:#2563eb;color:white;padding:2px 8px;border-radius:10px;font-size:12px;'>{category}</span>" if category else ""
+    st.markdown(f"""
+<div style='background:white;border-radius:12px;padding:16px 20px;
+            box-shadow:0 4px 15px rgba(0,0,0,.07);margin-bottom:12px;'>
+  <div style='display:flex;justify-content:space-between;align-items:center;'>
+    <span style='font-weight:700;font-size:16px;color:#0f172a;'>#{rank} {doc['title'][:65]}</span>
+    {cat_badge}
+  </div>
+  <div style='margin:6px 0;color:#64748b;font-size:13px;'>{snippet}</div>
+  <div style='display:flex;gap:16px;margin-top:8px;font-size:13px;'>
+    <span>🔗 <a href='{doc['url']}' target='_blank'>Open</a></span>
+    <span>📊 Score: <b>{score:.4f}</b></span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-st.sidebar.title("🔍 IR System")
+# ── Page config & global CSS ───────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Smart Information Retrieval System",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown("""
+<style>
+html, body, [class*="css"] { font-family:'Segoe UI',sans-serif; }
+.main { background:#f5f7fb; }
+section[data-testid="stSidebar"] {
+    background:linear-gradient(180deg,#0f172a,#1e293b);
+}
+section[data-testid="stSidebar"] * { color:white !important; }
+.block-container { padding-top:1rem; }
+.big-title  { font-size:36px;font-weight:700;color:#0f172a; }
+.sub-title  { color:#64748b;font-size:16px; }
+div.stButton>button {
+    width:100%;border-radius:10px;height:46px;font-size:15px;
+    background:#2563eb;color:white;border:none;
+}
+div.stButton>button:hover { background:#1d4ed8; }
+[data-testid="metric-container"] {
+    background:white;border-radius:14px;padding:14px;
+    box-shadow:0 4px 14px rgba(0,0,0,.07);
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Session state ──────────────────────────────────────────────────────────────
+_defaults = {
+    "corpus":       load_corpus(),
+    "index":        load_index(),
+    "tfidf_vec":    None,
+    "tfidf_mat":    None,
+    "pagerank":     {},
+    "hits_hubs":    {},
+    "hits_auth":    {},
+    "link_graph":   None,
+    "ratings":      load_ratings(),
+    "stats":        load_stats(),
+    "search_history": [],
+    "crawl_summary":  {},
+}
+for k, v in _defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+st.sidebar.markdown("# 🚀 Smart IR\n### Information Retrieval Platform\n---")
+
+corpus     = st.session_state.corpus
+index      = st.session_state.index
+stats      = st.session_state.stats
+meta_all   = load_meta()
+
+st.sidebar.markdown(f"**📄 Documents:** {len(corpus)}")
+st.sidebar.markdown(f"**📚 Index Terms:** {len(index)}")
+idx_kb = index_size_kb()
+st.sidebar.markdown(f"**💾 Index Size:** {idx_kb} KB")
+last_crawl = st.session_state.crawl_summary.get("last_crawl") or meta_all and next(
+    (v.get("crawled_at","–") for v in meta_all.values()), "–")
+st.sidebar.markdown(f"**🕐 Last Crawl:** {last_crawl or '–'}")
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio("Navigation", [
     "Dashboard",
     "Crawling",
@@ -357,62 +452,91 @@ page = st.sidebar.radio("Navigation", [
     "Ranking Visualization",
     "Recommendations",
     "Evaluation",
+    "Performance Analytics",
 ])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 1 – Dashboard
 # ─────────────────────────────────────────────────────────────────────────────
 if page == "Dashboard":
-    st.title("📊 System Dashboard")
-    corpus = st.session_state.corpus
-    index  = st.session_state.index
+    left, right = st.columns([4, 1])
+    with left:
+        st.markdown("""
+<div class='big-title'>🚀 Smart Information Retrieval System</div>
+<div class='sub-title'>End-to-End Information Retrieval Platform</div><br>
+""", unsafe_allow_html=True)
+    with right:
+        st.success("🟢 Online")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Documents", len(corpus))
-    c2.metric("Index Terms", len(index))
     total_tokens = sum(sum(v.values()) for v in index.values())
-    c3.metric("Total Token Occurrences", total_tokens)
-    avg_len = np.mean([len(d["body"].split()) for d in corpus]) if corpus else 0
-    c4.metric("Avg Doc Length (words)", int(avg_len))
+    avg_len  = int(np.mean([len(d["body"].split()) for d in corpus])) if corpus else 0
+    cs       = st.session_state.crawl_summary
+    dup_skip = cs.get("dup_urls", 0) + cs.get("dup_docs", 0)
+
+    st.markdown("## 📈 Key Performance Indicators")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📄 Documents",       len(corpus))
+    c2.metric("📚 Vocabulary",       len(index))
+    c3.metric("📝 Total Tokens",     total_tokens)
+    c4.metric("📖 Avg Doc Length",   avg_len)
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("🌐 URLs Visited",     cs.get("total_visited", "–"))
+    c6.metric("🚫 Duplicates Skipped", dup_skip)
+    c7.metric("💾 Index Size (KB)",  idx_kb)
+    avg_depth = round(np.mean([v.get("depth", 0) for v in meta_all.values()]), 1) if meta_all else 0
+    c8.metric("🔁 Avg Crawl Depth",  avg_depth)
+
+    st.info("""
+### 👋 Welcome
+This system provides: &nbsp;
+✅ Intelligent Crawling &nbsp; ✅ Text Mining &nbsp; ✅ Index Management &nbsp;
+✅ Search Engine &nbsp; ✅ PageRank / HITS Ranking &nbsp;
+✅ Recommendation System &nbsp; ✅ Evaluation Metrics &nbsp; ✅ Performance Analytics
+""")
 
     if corpus:
-        st.subheader("Document Length Distribution")
-        lengths = [len(d["body"].split()) for d in corpus]
-        fig = px.histogram(x=lengths, nbins=20, labels={"x": "Word Count"},
-                           title="Document Length Distribution",
-                           color_discrete_sequence=["#4C78A8"])
-        st.plotly_chart(fig, use_container_width=True)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Document Length Distribution")
+            lengths = [len(d["body"].split()) for d in corpus]
+            fig = px.histogram(x=lengths, nbins=20, labels={"x": "Word Count"},
+                               title="Document Length Distribution",
+                               color_discrete_sequence=["#2563EB"])
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("Top-20 Index Terms by Document Frequency")
-        df_terms = pd.DataFrame(
-            [(t, len(postings)) for t, postings in index.items()],
-            columns=["Term", "Doc Frequency"]
-        ).nlargest(20, "Doc Frequency")
-        fig2 = px.bar(df_terms, x="Term", y="Doc Frequency",
-                      color_discrete_sequence=["#E45756"])
-        st.plotly_chart(fig2, use_container_width=True)
+        with col_b:
+            st.subheader("Top-20 Index Terms")
+            if index:
+                df_terms = pd.DataFrame(
+                    [(t, len(p)) for t, p in index.items()],
+                    columns=["Term", "Doc Frequency"]
+                ).nlargest(20, "Doc Frequency")
+                fig2 = px.bar(df_terms, x="Term", y="Doc Frequency",
+                              color_discrete_sequence=["#10B981"])
+                fig2.update_xaxes(tickangle=45)
+                st.plotly_chart(fig2, use_container_width=True)
 
-        st.subheader("Crawled Documents")
+        if st.session_state.search_history:
+            st.subheader("🕵️ Recent Searches")
+            for q, mode, n, ms in st.session_state.search_history[-8:][::-1]:
+                st.markdown(f"- `{q}` — *{mode}* — {n} results in {ms:.0f} ms")
+
+        st.subheader("📋 Crawled Documents")
         df = pd.DataFrame([{"Title": d["title"][:70], "URL": d["url"],
-                             "Length": len(d["body"].split())} for d in corpus])
+                             "Length": len(d["body"].split()),
+                             "Category": auto_label(d)} for d in corpus])
         st.dataframe(df, use_container_width=True)
     else:
-        st.info("No documents yet. Go to **Crawling** to fetch some pages.")
+        st.warning("⚠️ No documents yet. Go to **Crawling** to fetch some pages.")
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 2 – Crawling
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Crawling":
-    st.title("🕷️ Web Crawling")
-
-    with st.expander("Default seed URLs (pre-loaded for demo)", expanded=False):
-        st.markdown("""
-- https://en.wikipedia.org/wiki/Information_retrieval
-- https://en.wikipedia.org/wiki/Natural_language_processing
-- https://en.wikipedia.org/wiki/Machine_learning
-- https://en.wikipedia.org/wiki/Search_engine
-- https://en.wikipedia.org/wiki/PageRank
-        """)
+    st.markdown("<div class='big-title'>🕷️ Web Crawling</div><br>", unsafe_allow_html=True)
 
     seeds_raw = st.text_area(
         "Seed URLs (one per line)",
@@ -423,285 +547,328 @@ elif page == "Crawling":
             "https://en.wikipedia.org/wiki/Search_engine",
             "https://en.wikipedia.org/wiki/PageRank",
         ]),
-        height=140,
+        height=150,
     )
     col1, col2 = st.columns(2)
     max_depth = col1.slider("Crawl Depth", 0, 2, 0)
-    max_pages = col2.slider("Max Pages", 5, 50, 10)
+    max_pages = col2.slider("Max Pages",   5, 50, 10)
 
     if st.button("🚀 Start Crawling", type="primary"):
         seeds = [s.strip() for s in seeds_raw.strip().split("\n") if s.strip()]
-        with st.spinner("Crawling…"):
-            new_docs, new_meta = crawl(seeds, max_depth=max_depth, max_pages=max_pages)
+        if not seeds:
+            st.error("Please enter at least one seed URL.")
+        else:
+            with st.spinner("Crawling…"):
+                new_docs, new_meta, summary = crawl(seeds, max_depth=max_depth, max_pages=max_pages)
 
-        # Merge with existing (dedup by URL)
-        existing_urls = {d["url"] for d in st.session_state.corpus}
-        added = [d for d in new_docs if d["url"] not in existing_urls]
+            existing_urls = {d["url"] for d in st.session_state.corpus}
+            added = [d for d in new_docs if d["url"] not in existing_urls]
+            base  = len(st.session_state.corpus)
+            for i, d in enumerate(added):
+                d["id"] = f"doc_{base + i}"
 
-        # Re-ID
-        base = len(st.session_state.corpus)
-        for i, d in enumerate(added):
-            d["id"] = f"doc_{base + i}"
+            st.session_state.corpus.extend(added)
+            save_corpus(st.session_state.corpus)
 
-        st.session_state.corpus.extend(added)
-        save_corpus(st.session_state.corpus)
+            meta = load_meta()
+            meta.update({d["id"]: new_meta.get(d.get("id", ""), {}) for d in added})
+            save_meta(meta)
 
-        meta = load_meta()
-        meta.update({d["id"]: new_meta.get(d.get("id", ""), {}) for d in added})
-        save_meta(meta)
+            st.session_state.crawl_summary = summary
 
-        st.success(f"Added {len(added)} new documents. Total: {len(st.session_state.corpus)}")
+            # Crawl summary card
+            st.success(f"✅ Added **{len(added)}** new documents. Corpus total: **{len(st.session_state.corpus)}**")
+            st.markdown("### 📊 Crawl Summary")
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("🌐 URLs Visited",    summary["total_visited"])
+            s2.metric("✅ Successful",       summary["successful"])
+            s3.metric("❌ Failed",           summary["failed"])
+            s4.metric("🚫 Dup URLs Skipped", summary["dup_urls"])
+            s5, s6, s7 = st.columns(3)
+            s5.metric("📄 Dup Docs Skipped", summary["dup_docs"])
+            s6.metric("📦 Avg Page Size",    f"{summary['avg_page_size_kb']} KB")
+            s7.metric("⏱️ Duration",          f"{summary['crawl_duration_s']} s")
 
     if st.session_state.corpus:
         st.subheader("Crawled Documents")
         meta = load_meta()
-        rows = []
-        for d in st.session_state.corpus:
-            m = meta.get(d["id"], {})
-            rows.append({"ID": d["id"], "Title": d["title"][:60],
-                         "URL": d["url"], "Depth": m.get("depth", "-"),
-                         "Length": m.get("length", len(d["body"]))})
+        rows = [{"ID": d["id"], "Title": d["title"][:60], "URL": d["url"],
+                 "Depth": meta.get(d["id"], {}).get("depth", "-"),
+                 "Size (KB)": round(meta.get(d["id"], {}).get("size_bytes", len(d["body"])) / 1024, 1),
+                 "Crawled At": meta.get(d["id"], {}).get("crawled_at", "-")}
+                for d in st.session_state.corpus]
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
         if st.button("🗑️ Clear Corpus"):
-            st.session_state.corpus = []
-            st.session_state.index  = {}
+            st.session_state.corpus       = []
+            st.session_state.index        = {}
+            st.session_state.crawl_summary= {}
             save_corpus([])
             save_index({})
             st.rerun()
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 3 – Index Management
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Index Management":
-    st.title("🗂️ Index Management")
+    st.markdown("<div class='big-title'>🗂️ Index Management</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
 
     if not corpus:
-        st.warning("Crawl some documents first.")
+        st.warning("⚠️ Crawl some documents first.")
     else:
-        col1, col2 = st.columns(2)
-        if col1.button("Build / Rebuild Index", type="primary"):
-            with st.spinner("Building inverted index…"):
+        if st.button("⚙️ Build / Rebuild Index", type="primary"):
+            t0 = time.time()
+            with st.spinner("Building inverted index & TF-IDF…"):
                 idx = build_inverted_index(corpus)
                 st.session_state.index = idx
                 save_index(idx)
-
                 vec, mat = build_tfidf(corpus)
                 st.session_state.tfidf_vec = vec
                 st.session_state.tfidf_mat = mat
 
+            t1 = time.time()
+            with st.spinner("Computing PageRank & HITS…"):
                 pr, G = build_pagerank(corpus)
                 hubs, auths = compute_hits(G)
                 st.session_state.pagerank   = pr
                 st.session_state.hits_hubs  = hubs
                 st.session_state.hits_auth  = auths
                 st.session_state.link_graph = G
-            st.success(f"Index built: {len(idx)} unique terms.")
 
-        index = st.session_state.index
-        if index:
-            st.metric("Unique Terms", len(index))
-            st.metric("Total Postings", sum(len(v) for v in index.values()))
+            build_time = round(time.time() - t0, 2)
+            s = load_stats()
+            s["index_build_time_s"] = build_time
+            s["index_build_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            save_stats(s)
+            st.session_state.stats = s
+            st.success(f"✅ Index built: **{len(idx)}** unique terms in **{build_time}s**")
 
-            st.subheader("Lookup a Term")
-            term = st.text_input("Term", "search")
+        idx = st.session_state.index
+        if idx:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Unique Terms",   len(idx))
+            m2.metric("Total Postings", sum(len(v) for v in idx.values()))
+            m3.metric("Index Size",     f"{index_size_kb()} KB")
+
+            st.subheader("🔍 Term Lookup")
+            term = st.text_input("Enter term", "search")
             if term:
                 proc = preprocess(term)
                 key  = proc[0] if proc else term
-                postings = index.get(key, {})
+                postings = idx.get(key, {})
                 if postings:
                     st.json(postings)
                 else:
-                    st.info(f"Term '{key}' not in index.")
+                    st.info(f"Term `{key}` not found in index.")
 
-            st.subheader("Top Terms by Posting-list Length")
+            st.subheader("📊 Top 30 Terms by Document Frequency")
             df = pd.DataFrame(
-                [(t, len(p), sum(p.values())) for t, p in index.items()],
+                [(t, len(p), sum(p.values())) for t, p in idx.items()],
                 columns=["Term", "Doc Freq", "Total Freq"]
             ).nlargest(30, "Doc Freq")
             st.dataframe(df, use_container_width=True)
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 4 – Text Mining
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Text Mining":
-    st.title("⛏️ Text Mining & Preprocessing")
+    st.markdown("<div class='big-title'>⛏️ Text Mining & Preprocessing</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
+
     if not corpus:
-        st.warning("Crawl some documents first.")
+        st.warning("⚠️ Crawl some documents first.")
     else:
         tab1, tab2, tab3 = st.tabs(["Preprocessing Comparison", "Keyword Extraction", "Document Classification"])
 
         with tab1:
             doc_idx = st.selectbox("Select Document", range(len(corpus)),
                                    format_func=lambda i: corpus[i]["title"][:60])
-            doc = corpus[doc_idx]
-            raw = doc["body"][:1000]
-            st.text_area("Raw Text (first 1000 chars)", raw, height=120)
+            raw = corpus[doc_idx]["body"][:1000]
+            st.text_area("Raw Text (first 1000 chars)", raw, height=110)
 
-            col1, col2 = st.columns(2)
-            with col1:
+            c1, c2 = st.columns(2)
+            with c1:
                 st.markdown("**Stemming**")
-                stemmed = " ".join(preprocess(raw, "stem")[:50])
-                st.text_area("", stemmed, height=100, key="stem_out")
-            with col2:
+                st.text_area("", " ".join(preprocess(raw, "stem")[:50]), height=90, key="stem_out")
+            with c2:
                 st.markdown("**Lemmatization**")
-                lemmed = " ".join(preprocess(raw, "lemmatize")[:50])
-                st.text_area("", lemmed, height=100, key="lem_out")
+                st.text_area("", " ".join(preprocess(raw, "lemmatize")[:50]), height=90, key="lem_out")
 
-            # Token count comparison
-            orig_tokens  = tokenize(raw)
-            no_stop      = remove_stopwords(orig_tokens)
-            stem_tokens_ = stem_tokens(no_stop)
-            lem_tokens_  = lemmatize_tokens(no_stop)
-
-            comp = pd.DataFrame({
-                "Stage": ["Raw", "No Stopwords", "Stemmed", "Lemmatized"],
-                "Token Count": [len(orig_tokens), len(no_stop), len(stem_tokens_), len(lem_tokens_)]
+            orig    = tokenize(raw)
+            no_stop = remove_stopwords(orig)
+            comp_df = pd.DataFrame({
+                "Stage": ["Raw Tokens", "After Stopword Removal", "After Stemming", "After Lemmatization"],
+                "Count": [len(orig), len(no_stop), len(stem_tokens(no_stop)), len(lemmatize_tokens(no_stop))]
             })
-            fig = px.bar(comp, x="Stage", y="Token Count",
-                         color_discrete_sequence=["#54A24B"],
+            fig = px.bar(comp_df, x="Stage", y="Count",
+                         color_discrete_sequence=["#2563EB"],
                          title="Token Reduction across Preprocessing Stages")
             st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
-            st.subheader("Top Keywords per Document (TF-IDF)")
             if st.session_state.tfidf_vec is None:
-                st.info("Build the index first (Index Management page).")
+                st.info("ℹ️ Build the index first (Index Management page).")
             else:
                 vec = st.session_state.tfidf_vec
                 mat = st.session_state.tfidf_mat
                 doc_idx2 = st.selectbox("Document", range(len(corpus)),
                                         format_func=lambda i: corpus[i]["title"][:60],
                                         key="kw_doc")
-                row = mat[doc_idx2].toarray().flatten()
+                row     = mat[doc_idx2].toarray().flatten()
                 top_idx = row.argsort()[::-1][:20]
-                words = vec.get_feature_names_out()
-                kw_df = pd.DataFrame({"Keyword": words[top_idx], "TF-IDF Score": row[top_idx]})
-                fig = px.bar(kw_df, x="Keyword", y="TF-IDF Score",
+                words   = vec.get_feature_names_out()
+                kw_df   = pd.DataFrame({"Keyword": words[top_idx], "TF-IDF": row[top_idx]})
+                fig = px.bar(kw_df, x="Keyword", y="TF-IDF",
                              color_discrete_sequence=["#B279A2"],
                              title="Top-20 Keywords by TF-IDF")
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.subheader("Corpus-Wide Term Frequency")
-                all_tokens = []
+                st.subheader("Corpus-Wide Most Common Terms")
+                all_tok = []
                 for d in corpus:
-                    all_tokens.extend(preprocess(d["body"]))
-                freq = Counter(all_tokens).most_common(30)
-                freq_df = pd.DataFrame(freq, columns=["Term", "Frequency"])
+                    all_tok.extend(preprocess(d["body"]))
+                freq_df = pd.DataFrame(Counter(all_tok).most_common(30),
+                                       columns=["Term", "Frequency"])
                 fig2 = px.bar(freq_df, x="Term", y="Frequency",
                               color_discrete_sequence=["#F58518"])
+                fig2.update_xaxes(tickangle=45)
                 st.plotly_chart(fig2, use_container_width=True)
 
         with tab3:
-            st.subheader("Document Classification (Naive Bayes, auto-labeled)")
             if st.session_state.tfidf_mat is None:
-                st.info("Build the index first.")
+                st.info("ℹ️ Build the index first.")
             else:
-                # Auto-assign categories based on title keywords
-                categories = {
-                    "ML/AI": ["machine", "learning", "neural", "deep", "model", "algorithm"],
-                    "IR/Search": ["retrieval", "search", "index", "query", "ranking"],
-                    "NLP": ["language", "text", "nlp", "processing", "corpus"],
-                    "Web": ["web", "internet", "crawl", "page", "link", "network"],
-                }
-
-                def auto_label(doc):
-                    t = (doc["title"] + " " + doc["body"][:200]).lower()
-                    scores = {cat: sum(1 for kw in kws if kw in t)
-                              for cat, kws in categories.items()}
-                    best = max(scores, key=scores.get)
-                    return best if scores[best] > 0 else "General"
-
                 labels = [auto_label(d) for d in corpus]
-                label_counts = Counter(labels)
-                lc_df = pd.DataFrame(label_counts.items(), columns=["Category", "Count"])
+                lc_df  = pd.DataFrame(Counter(labels).items(), columns=["Category", "Count"])
                 fig = px.pie(lc_df, names="Category", values="Count",
                              title="Auto-labeled Category Distribution")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Train NB and show class probabilities for a query
                 mat = st.session_state.tfidf_mat
                 le  = LabelEncoder()
                 y   = le.fit_transform(labels)
                 clf = MultinomialNB()
-                # NB needs non-negative; TF-IDF is always >= 0
                 clf.fit(mat, y)
 
-                q = st.text_input("Classify a custom text", "information retrieval ranking")
+                q = st.text_input("Classify custom text", "information retrieval ranking")
                 if q:
-                    q_vec = st.session_state.tfidf_vec.transform([preprocess_str(q)])
-                    probs = clf.predict_proba(q_vec)[0]
-                    prob_df = pd.DataFrame({"Category": le.classes_, "Probability": probs}).sort_values("Probability", ascending=False)
-                    st.dataframe(prob_df)
+                    q_vec  = st.session_state.tfidf_vec.transform([preprocess_str(q)])
+                    probs  = clf.predict_proba(q_vec)[0]
+                    p_df   = pd.DataFrame({"Category": le.classes_, "Probability": probs}).sort_values("Probability", ascending=False)
+                    st.dataframe(p_df)
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 5 – Search
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Search":
-    st.title("🔎 Web Search Interface")
+    st.markdown("<div class='big-title'>🔎 Search Interface</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
     index  = st.session_state.index
 
-    if not corpus or not index:
-        st.warning("Crawl documents and build the index first.")
+    if not corpus:
+        st.warning("⚠️ Crawl some documents first.")
+    elif not index:
+        st.warning("⚠️ Build the index first (Index Management).")
     else:
-        query = st.text_input("Enter your query", "information retrieval")
-        col1, col2, col3 = st.columns(3)
-        mode  = col1.selectbox("Search Mode", ["TF-IDF Ranked", "Boolean AND", "Boolean OR", "PageRank Combined"])
-        top_k = col2.slider("Top K results", 3, 20, 10)
-        alpha = col3.slider("PageRank weight (for combined)", 0.0, 1.0, 0.5, 0.05)
+        # Example queries
+        with st.expander("💡 Example queries"):
+            st.markdown("`information retrieval` &nbsp; `machine learning algorithm` &nbsp; `web search ranking` &nbsp; `natural language processing` &nbsp; `PageRank link analysis`")
 
-        if st.button("Search", type="primary") and query:
-            start = time.time()
+        query = st.text_input("Enter your query", "information retrieval")
+        c1, c2, c3, c4 = st.columns(4)
+        mode    = c1.selectbox("Search Mode", ["TF-IDF Ranked", "Boolean AND", "Boolean OR", "PageRank Combined"])
+        top_k   = c2.slider("Top K", 3, 20, 10)
+        alpha   = c3.slider("TF-IDF weight", 0.0, 1.0, 0.5, 0.05, help="Only for PageRank Combined")
+        min_len = c4.slider("Min doc length (words)", 0, 500, 0)
+
+        sort_by = st.radio("Sort results by", ["Score (desc)", "Title (asc)"], horizontal=True)
+
+        if st.button("🔍 Search", type="primary") and query:
+            t0 = time.time()
+
             if mode == "Boolean AND":
-                results = boolean_search(query, index, corpus, "AND")
-                results = [(d, 1.0) for d in results[:top_k]]
+                raw = boolean_search(query, index, corpus, "AND")
+                results = [(d, 1.0) for d in raw[:top_k]]
             elif mode == "Boolean OR":
-                results = boolean_search(query, index, corpus, "OR")
-                results = [(d, 1.0) for d in results[:top_k]]
+                raw = boolean_search(query, index, corpus, "OR")
+                results = [(d, 1.0) for d in raw[:top_k]]
             elif mode == "TF-IDF Ranked":
                 if st.session_state.tfidf_vec is None:
                     st.error("Build TF-IDF index first.")
                     st.stop()
                 results = tfidf_search(query, corpus, st.session_state.tfidf_vec,
                                        st.session_state.tfidf_mat, top_k)
-            else:  # PageRank Combined
+            else:
                 if st.session_state.tfidf_vec is None:
                     st.error("Build index first.")
                     st.stop()
                 results = ranked_search(query, corpus, st.session_state.tfidf_vec,
                                         st.session_state.tfidf_mat,
                                         st.session_state.pagerank, top_k, alpha)
-            elapsed = time.time() - start
 
-            st.caption(f"{len(results)} results in {elapsed*1000:.1f} ms")
-            for rank, (doc, score) in enumerate(results, 1):
-                with st.expander(f"#{rank} — {doc['title'][:70]}  (score: {score:.4f})"):
-                    st.markdown(f"**URL:** [{doc['url']}]({doc['url']})")
-                    # Highlight query terms in snippet
-                    snippet = doc["body"][:400]
-                    for t in query.lower().split():
-                        snippet = re.sub(f"(?i)({re.escape(t)})", r"**\1**", snippet)
-                    st.markdown(snippet + "…")
+            # Filter by min length
+            results = [(d, s) for d, s in results if len(d["body"].split()) >= min_len]
 
-            if results:
-                scores_df = pd.DataFrame(
-                    {"Title": [r[0]["title"][:40] for r in results],
-                     "Score": [r[1] for r in results]}
-                )
+            # Sort
+            if sort_by == "Title (asc)":
+                results.sort(key=lambda x: x[0]["title"])
+
+            elapsed_ms = (time.time() - t0) * 1000
+
+            # Save to history
+            hist = st.session_state.search_history
+            hist.append((query, mode, len(results), elapsed_ms))
+            st.session_state.search_history = hist[-20:]
+
+            # Track mode usage
+            s = st.session_state.stats
+            s.setdefault("mode_usage", {})
+            s["mode_usage"][mode] = s["mode_usage"].get(mode, 0) + 1
+            s.setdefault("search_latencies_ms", [])
+            s["search_latencies_ms"].append(round(elapsed_ms, 1))
+            save_stats(s)
+            st.session_state.stats = s
+
+            if not results:
+                st.info("🔍 No results found. Try a different query or search mode.")
+            else:
+                st.caption(f"**{len(results)}** results in **{elapsed_ms:.1f} ms**")
+                for rank, (doc, score) in enumerate(results, 1):
+                    with st.expander(f"#{rank}  {doc['title'][:70]}  (score: {score:.4f})"):
+                        st.markdown(f"**URL:** [{doc['url']}]({doc['url']})")
+                        st.markdown(f"**Category:** `{auto_label(doc)}` &nbsp; **Length:** {len(doc['body'].split())} words")
+                        snippet = doc["body"][:400]
+                        for t in query.lower().split():
+                            snippet = re.sub(f"(?i)({re.escape(t)})", r"**\1**", snippet)
+                        st.markdown(snippet + "…")
+
+                scores_df = pd.DataFrame({"Title": [r[0]["title"][:40] for r in results],
+                                           "Score": [r[1] for r in results]})
                 fig = px.bar(scores_df, x="Title", y="Score",
                              title="Result Score Distribution",
-                             color_discrete_sequence=["#4C78A8"])
-                fig.update_xaxes(tickangle=30)
+                             color_discrete_sequence=["#2563EB"])
+                fig.update_xaxes(tickangle=35)
                 st.plotly_chart(fig, use_container_width=True)
+
+        if st.session_state.search_history:
+            with st.expander("📜 Search History"):
+                for q, m, n, ms in st.session_state.search_history[::-1]:
+                    st.markdown(f"- `{q}` — *{m}* — {n} results — {ms:.0f} ms")
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 6 – Ranking Visualization
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Ranking Visualization":
-    st.title("📈 Ranking Visualization")
+    st.markdown("<div class='big-title'>📈 Ranking Visualization</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
     pr     = st.session_state.pagerank
     hubs   = st.session_state.hits_hubs
@@ -709,9 +876,9 @@ elif page == "Ranking Visualization":
     G      = st.session_state.link_graph
 
     if not corpus or not pr:
-        st.warning("Build the index first (Index Management).")
+        st.warning("⚠️ Build the index first (Index Management).")
     else:
-        tab1, tab2 = st.tabs(["PageRank", "HITS"])
+        tab1, tab2, tab3 = st.tabs(["PageRank", "HITS", "Side-by-Side Comparison"])
 
         with tab1:
             st.subheader("PageRank Scores")
@@ -721,34 +888,31 @@ elif page == "Ranking Visualization":
             ]).sort_values("PageRank", ascending=False)
             fig = px.bar(pr_df, x="Document", y="PageRank",
                          color_discrete_sequence=["#E45756"],
-                         title="PageRank per Document")
+                         title="PageRank Score per Document")
             fig.update_xaxes(tickangle=45)
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(pr_df)
+            st.dataframe(pr_df, use_container_width=True)
 
-            st.subheader("Link Graph (similarity-based)")
             if G is not None and G.number_of_edges() > 0:
-                # Show top 15 nodes for clarity
-                top_nodes = pr_df.head(15)["Document"].tolist()
-                node_ids  = [d["id"] for d in corpus if d["title"][:50] in top_nodes]
-                SG = G.subgraph(node_ids[:15])
+                st.subheader("Link Graph (similarity-based)")
+                node_ids = [d["id"] for d in corpus][:15]
+                SG  = G.subgraph(node_ids)
                 pos = nx.spring_layout(SG, seed=42)
-                edge_x, edge_y = [], []
+                ex, ey = [], []
                 for u, v in SG.edges():
                     x0, y0 = pos[u]; x1, y1 = pos[v]
-                    edge_x += [x0, x1, None]
-                    edge_y += [y0, y1, None]
-                node_x = [pos[n][0] for n in SG.nodes()]
-                node_y = [pos[n][1] for n in SG.nodes()]
-                node_text = [n for n in SG.nodes()]
+                    ex += [x0, x1, None]; ey += [y0, y1, None]
                 fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=edge_x, y=edge_y, mode="lines",
+                fig2.add_trace(go.Scatter(x=ex, y=ey, mode="lines",
                                           line=dict(width=0.8, color="#aaa")))
-                fig2.add_trace(go.Scatter(x=node_x, y=node_y, mode="markers+text",
-                                          text=node_text, textposition="top center",
-                                          marker=dict(size=12, color="#4C78A8")))
-                fig2.update_layout(showlegend=False, height=400,
-                                   title="Link Graph (top 15 nodes)")
+                fig2.add_trace(go.Scatter(
+                    x=[pos[n][0] for n in SG.nodes()],
+                    y=[pos[n][1] for n in SG.nodes()],
+                    mode="markers+text", text=list(SG.nodes()),
+                    textposition="top center",
+                    marker=dict(size=12, color="#2563EB")))
+                fig2.update_layout(showlegend=False, height=420,
+                                   title="Similarity-Based Link Graph (top 15 nodes)")
                 st.plotly_chart(fig2, use_container_width=True)
 
         with tab2:
@@ -760,22 +924,62 @@ elif page == "Ranking Visualization":
                 for d in corpus
             ]).sort_values("Authority Score", ascending=False)
             fig = px.scatter(hits_df, x="Hub Score", y="Authority Score",
-                             text="Document", title="HITS: Hub vs Authority",
+                             text="Document", title="HITS: Hub vs Authority Score",
                              color_discrete_sequence=["#72B7B2"])
             fig.update_traces(textposition="top center")
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(hits_df)
+            st.dataframe(hits_df, use_container_width=True)
+
+        with tab3:
+            st.subheader("Side-by-Side: TF-IDF vs PageRank vs Combined")
+            if st.session_state.tfidf_vec is None:
+                st.info("Build the index first to compute TF-IDF scores.")
+            else:
+                query_r = st.text_input("Query for ranking comparison", "information retrieval")
+                if query_r:
+                    vec = st.session_state.tfidf_vec
+                    mat = st.session_state.tfidf_mat
+                    tfidf_scores  = cosine_similarity(vec.transform([preprocess_str(query_r)]), mat).flatten()
+                    pr_scores_raw = np.array([pr.get(d["id"], 0) for d in corpus])
+                    pr_norm       = pr_scores_raw / pr_scores_raw.max() if pr_scores_raw.max() > 0 else pr_scores_raw
+                    combined      = 0.5 * tfidf_scores + 0.5 * pr_norm
+
+                    comp_df = pd.DataFrame({
+                        "Document":  [d["title"][:40] for d in corpus],
+                        "TF-IDF":    tfidf_scores,
+                        "PageRank":  pr_norm,
+                        "Combined":  combined,
+                    }).sort_values("Combined", ascending=False).head(15)
+
+                    fig = px.bar(comp_df, x="Document", y=["TF-IDF", "PageRank", "Combined"],
+                                 barmode="group", title="Ranking Score Comparison",
+                                 color_discrete_sequence=["#2563EB", "#E45756", "#10B981"])
+                    fig.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.dataframe(comp_df.round(4), use_container_width=True)
+
+                    st.info("""
+**Why combined ranking improves results:**
+TF-IDF captures query-term relevance but ignores document authority.
+PageRank measures structural importance based on link topology.
+Combining both ensures that highly relevant documents which are also well-connected
+score higher — reducing the risk of surfacing obscure but keyword-dense pages at the top.
+                    """)
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 7 – Recommendations
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Recommendations":
-    st.title("💡 Recommendation Panel")
+    st.markdown("<div class='big-title'>💡 Recommendation Panel</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
     mat    = st.session_state.tfidf_mat
 
-    if not corpus or mat is None:
-        st.warning("Build the index first.")
+    if not corpus:
+        st.warning("⚠️ Crawl some documents first.")
+    elif mat is None:
+        st.warning("⚠️ Build the index first (Index Management).")
     else:
         tab1, tab2, tab3 = st.tabs(["Content-Based", "Collaborative", "Hybrid"])
 
@@ -783,189 +987,263 @@ elif page == "Recommendations":
             st.subheader("Content-Based Recommendations")
             doc_idx = st.selectbox("Reference document", range(len(corpus)),
                                    format_func=lambda i: corpus[i]["title"][:60])
-            top_k = st.slider("Top K", 3, 10, 5, key="cb_k")
-            recs = content_based_recommend(doc_idx, corpus, mat, top_k)
+            top_k   = st.slider("Top K", 3, 10, 5, key="cb_k")
+            recs    = content_based_recommend(doc_idx, corpus, mat, top_k)
+
             if recs:
                 for rank, (doc, sim) in enumerate(recs, 1):
-                    st.markdown(f"**#{rank}** [{doc['title'][:70]}]({doc['url']}) — Cosine Similarity: `{sim:.4f}`")
+                    rec_card(rank, doc, sim, auto_label(doc))
+
                 sim_df = pd.DataFrame({"Title": [r[0]["title"][:40] for r in recs],
                                        "Similarity": [r[1] for r in recs]})
                 fig = px.bar(sim_df, x="Title", y="Similarity",
-                             color_discrete_sequence=["#54A24B"])
+                             color_discrete_sequence=["#10B981"],
+                             title="Cosine Similarity of Recommendations")
                 fig.update_xaxes(tickangle=30)
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No similar documents found.")
+                st.info("No similar documents found for this document.")
 
         with tab2:
             st.subheader("Collaborative Filtering")
-            st.markdown("Rate some documents to enable collaborative recommendations.")
+            st.markdown("Rate some documents below, then request recommendations.")
             ratings = st.session_state.ratings
-            user_id = st.text_input("User ID", "user_1")
+            user_id = st.text_input("Your User ID", "user_1")
 
-            with st.expander("Rate Documents"):
+            with st.expander("⭐ Rate Documents"):
                 for doc in corpus[:10]:
-                    r = st.slider(doc["title"][:50], 0, 5, 0, key=f"rate_{doc['id']}")
+                    r = st.slider(doc["title"][:55], 0, 5, 0, key=f"rate_{doc['id']}")
                     if r > 0:
-                        if user_id not in ratings:
-                            ratings[user_id] = {}
-                        ratings[user_id][doc["id"]] = r
-                if st.button("Save Ratings"):
+                        ratings.setdefault(user_id, {})[doc["id"]] = r
+                if st.button("💾 Save Ratings"):
                     st.session_state.ratings = ratings
                     save_ratings(ratings)
                     st.success("Ratings saved.")
 
-            if st.button("Get Collaborative Recommendations"):
-                # Add some synthetic users for meaningful CF
+            if st.button("🤝 Get Collaborative Recommendations"):
                 doc_ids = [d["id"] for d in corpus]
-                if "synthetic_user_1" not in ratings:
-                    ratings["synthetic_user_1"] = {
-                        doc_ids[i]: np.random.randint(1, 6)
-                        for i in range(min(len(doc_ids), 8))
-                    }
-                    ratings["synthetic_user_2"] = {
-                        doc_ids[i]: np.random.randint(1, 6)
-                        for i in range(min(len(doc_ids), 8))
-                    }
-                    st.session_state.ratings = ratings
+                rng = np.random.default_rng(42)
+                for syn in ["synthetic_user_1", "synthetic_user_2"]:
+                    if syn not in ratings:
+                        ratings[syn] = {doc_ids[i]: int(rng.integers(1, 6))
+                                        for i in range(min(len(doc_ids), 8))}
+                st.session_state.ratings = ratings
 
                 recs = collab_recommend(user_id, ratings, corpus, mat, top_k=5)
                 if recs:
-                    st.subheader("Recommended for you:")
                     for rank, (doc, score) in enumerate(recs, 1):
-                        st.markdown(f"**#{rank}** {doc['title'][:70]} — Score: `{score:.4f}`")
+                        rec_card(rank, doc, score, auto_label(doc))
                 else:
-                    st.info("Rate at least one document first, or add more users.")
+                    st.info("Rate at least one document first to get personalised recommendations.")
 
         with tab3:
             st.subheader("Hybrid Recommendation (CB + CF blend)")
             doc_idx_h = st.selectbox("Reference doc", range(len(corpus)),
                                      format_func=lambda i: corpus[i]["title"][:60],
                                      key="hyb_doc")
-            user_id_h = st.text_input("User ID for CF component", "user_1", key="hyb_user")
-            cb_weight = st.slider("Content-Based Weight", 0.0, 1.0, 0.6)
-            cf_weight = 1.0 - cb_weight
+            user_id_h = st.text_input("User ID for CF", "user_1", key="hyb_user")
+            cb_w = st.slider("Content-Based weight", 0.0, 1.0, 0.6)
 
-            if st.button("Get Hybrid Recommendations"):
+            if st.button("🔀 Get Hybrid Recommendations"):
                 cb_recs = content_based_recommend(doc_idx_h, corpus, mat, top_k=10)
                 cf_recs = collab_recommend(user_id_h, st.session_state.ratings,
                                            corpus, mat, top_k=10)
-
-                cb_map = {d["id"]: s for d, s in cb_recs}
-                cf_map = {d["id"]: s for d, s in cf_recs}
-                all_ids = set(cb_map) | set(cf_map)
+                cb_map  = {d["id"]: s for d, s in cb_recs}
+                cf_map  = {d["id"]: s for d, s in cf_recs}
                 doc_map = {d["id"]: d for d in corpus}
+                hybrid  = sorted(
+                    [(doc_map[did], cb_w * cb_map.get(did, 0) + (1 - cb_w) * cf_map.get(did, 0))
+                     for did in (set(cb_map) | set(cf_map)) if did in doc_map],
+                    key=lambda x: x[1], reverse=True
+                )[:8]
 
-                hybrid = []
-                for did in all_ids:
-                    score = cb_weight * cb_map.get(did, 0) + cf_weight * cf_map.get(did, 0)
-                    if did in doc_map:
-                        hybrid.append((doc_map[did], score))
-                hybrid.sort(key=lambda x: x[1], reverse=True)
-
-                st.subheader("Top Hybrid Recommendations")
-                for rank, (doc, score) in enumerate(hybrid[:5], 1):
-                    st.markdown(f"**#{rank}** {doc['title'][:70]} — Hybrid Score: `{score:.4f}`")
                 if hybrid:
-                    h_df = pd.DataFrame({"Title": [h[0]["title"][:40] for h in hybrid[:8]],
-                                         "Hybrid Score": [h[1] for h in hybrid[:8]]})
+                    for rank, (doc, score) in enumerate(hybrid[:5], 1):
+                        rec_card(rank, doc, score, auto_label(doc))
+                    h_df = pd.DataFrame({"Title": [h[0]["title"][:40] for h in hybrid],
+                                         "Hybrid Score": [h[1] for h in hybrid]})
                     fig = px.bar(h_df, x="Title", y="Hybrid Score",
-                                 color_discrete_sequence=["#B279A2"])
+                                 color_discrete_sequence=["#B279A2"],
+                                 title="Hybrid Recommendation Scores")
                     fig.update_xaxes(tickangle=30)
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Not enough data for hybrid recommendations.")
+
+    footer()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE 8 – Evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Evaluation":
-    st.title("📐 Evaluation Dashboard")
+    st.markdown("<div class='big-title'>📐 Evaluation Dashboard</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
     index  = st.session_state.index
 
-    if not corpus or not index:
-        st.warning("Crawl and index documents first.")
+    if not corpus:
+        st.warning("⚠️ Crawl some documents first.")
+    elif not index:
+        st.warning("⚠️ Build the index first.")
     else:
-        st.markdown("""
-        Define a **query** and mark which documents are **relevant** (ground truth),
-        then run different retrieval methods and compare their metrics.
-        """)
+        st.markdown("Define a **query** and mark **relevant documents** (ground truth), then compare all retrieval methods.")
 
         query = st.text_input("Evaluation Query", "information retrieval ranking")
         top_k = st.slider("K", 3, min(20, len(corpus)), min(10, len(corpus)))
 
-        st.subheader("Mark Relevant Documents (ground truth)")
-        relevant_ids = []
-        for doc in corpus:
-            if st.checkbox(doc["title"][:70], key=f"rel_{doc['id']}"):
-                relevant_ids.append(doc["id"])
+        st.subheader("✅ Mark Relevant Documents (Ground Truth)")
+        relevant_ids = [doc["id"] for doc in corpus
+                        if st.checkbox(doc["title"][:70], key=f"rel_{doc['id']}")]
 
-        if st.button("Run Evaluation", type="primary"):
+        if st.button("▶️ Run Evaluation", type="primary"):
             if not relevant_ids:
                 st.warning("Mark at least one relevant document.")
             elif st.session_state.tfidf_vec is None:
                 st.warning("Build the index first.")
             else:
-                methods = {}
-
-                # Boolean AND
-                bool_and = boolean_search(query, index, corpus, "AND")
-                methods["Boolean AND"] = [d["id"] for d in bool_and[:top_k]]
-
-                # Boolean OR
-                bool_or = boolean_search(query, index, corpus, "OR")
-                methods["Boolean OR"] = [d["id"] for d in bool_or[:top_k]]
-
-                # TF-IDF
-                tfidf_res = tfidf_search(query, corpus, st.session_state.tfidf_vec,
-                                         st.session_state.tfidf_mat, top_k)
-                methods["TF-IDF"] = [d["id"] for d, _ in tfidf_res]
-
-                # PageRank Combined
-                pr_res = ranked_search(query, corpus, st.session_state.tfidf_vec,
-                                       st.session_state.tfidf_mat,
-                                       st.session_state.pagerank, top_k)
-                methods["TF-IDF + PageRank"] = [d["id"] for d, _ in pr_res]
+                methods = {
+                    "Boolean AND":      [d["id"] for d in boolean_search(query, index, corpus, "AND")[:top_k]],
+                    "Boolean OR":       [d["id"] for d in boolean_search(query, index, corpus, "OR")[:top_k]],
+                    "TF-IDF":           [d["id"] for d, _ in tfidf_search(query, corpus,
+                                         st.session_state.tfidf_vec, st.session_state.tfidf_mat, top_k)],
+                    "TF-IDF+PageRank":  [d["id"] for d, _ in ranked_search(query, corpus,
+                                         st.session_state.tfidf_vec, st.session_state.tfidf_mat,
+                                         st.session_state.pagerank, top_k)],
+                }
 
                 rows = []
                 for method, retrieved in methods.items():
                     m = compute_metrics(retrieved, relevant_ids, k=top_k)
                     m["Method"] = method
                     rows.append(m)
-
-                eval_df = pd.DataFrame(rows).set_index("Method")
                 st.session_state.eval_results = rows
 
                 metric_cols = ["Precision", "Recall", "F1", "Precision@K",
                                "Recall@K", "AP", "MRR", "NDCG"]
-                st.subheader("Comparison Table")
+                eval_df = pd.DataFrame(rows).set_index("Method")
+
+                st.subheader("📊 Comparison Table")
                 st.dataframe(eval_df[metric_cols].round(4), use_container_width=True)
 
-                st.subheader("MAP & MRR Comparison")
-                fig = px.bar(eval_df.reset_index(), x="Method",
-                             y=["AP", "MRR", "NDCG"],
+                # Best method per metric
+                st.subheader("🏆 Best Method per Metric")
+                best_rows = []
+                for col in metric_cols:
+                    best_m = eval_df[col].idxmax()
+                    best_rows.append({"Metric": col, "Best Method": best_m,
+                                      "Score": round(eval_df.loc[best_m, col], 4)})
+                st.dataframe(pd.DataFrame(best_rows), use_container_width=True)
+
+                st.subheader("MAP / MRR / NDCG Comparison")
+                fig = px.bar(eval_df.reset_index(), x="Method", y=["AP", "MRR", "NDCG"],
                              barmode="group", title="MAP / MRR / NDCG",
-                             color_discrete_sequence=["#4C78A8", "#E45756", "#54A24B"])
+                             color_discrete_sequence=["#2563EB", "#E45756", "#10B981"])
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.subheader("Precision–Recall Curve (TF-IDF)")
-                prec_points, rec_points = [], []
-                for k_ in range(1, top_k + 1):
-                    m_ = compute_metrics(methods["TF-IDF"][:k_], relevant_ids, k=k_)
-                    prec_points.append(m_["Precision"])
-                    rec_points.append(m_["Recall"])
-                pr_fig = px.line(x=rec_points, y=prec_points,
+                pr_pts = [(compute_metrics(methods["TF-IDF"][:k_], relevant_ids, k=k_)["Precision"],
+                           compute_metrics(methods["TF-IDF"][:k_], relevant_ids, k=k_)["Recall"])
+                          for k_ in range(1, top_k + 1)]
+                pr_fig = px.line(x=[r for _, r in pr_pts], y=[p for p, _ in pr_pts],
                                  labels={"x": "Recall", "y": "Precision"},
-                                 title="Precision–Recall Curve (TF-IDF)",
-                                 markers=True)
+                                 title="Precision–Recall Curve (TF-IDF)", markers=True,
+                                 color_discrete_sequence=["#2563EB"])
                 st.plotly_chart(pr_fig, use_container_width=True)
 
                 st.subheader("NDCG@K Curve")
-                ndcg_vals = []
-                for k_ in range(1, top_k + 1):
-                    m_ = compute_metrics(methods["TF-IDF"][:k_], relevant_ids, k=k_)
-                    ndcg_vals.append(m_["NDCG"])
-                ndcg_fig = px.line(x=list(range(1, top_k + 1)), y=ndcg_vals,
-                                   labels={"x": "K", "y": "NDCG"},
-                                   title="NDCG@K Curve", markers=True,
-                                   color_discrete_sequence=["#F58518"])
+                ndcg_fig = px.line(
+                    x=list(range(1, top_k + 1)),
+                    y=[compute_metrics(methods["TF-IDF"][:k_], relevant_ids, k=k_)["NDCG"]
+                       for k_ in range(1, top_k + 1)],
+                    labels={"x": "K", "y": "NDCG"}, title="NDCG@K Curve",
+                    markers=True, color_discrete_sequence=["#F58518"])
                 st.plotly_chart(ndcg_fig, use_container_width=True)
+
+                best_overall = eval_df["NDCG"].idxmax()
+                st.info(f"""
+**Interpretation:** Across all metrics, **{best_overall}** achieves the highest NDCG score,
+indicating it returns the most relevant documents in the best rank order.
+Boolean methods may achieve higher recall but often rank relevant documents poorly.
+TF-IDF combined with PageRank typically improves ranking precision by weighting
+both query relevance and document authority.
+                """)
+
+    footer()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE 9 – Performance Analytics
+# ─────────────────────────────────────────────────────────────────────────────
+elif page == "Performance Analytics":
+    st.markdown("<div class='big-title'>⚡ Performance Analytics</div><br>", unsafe_allow_html=True)
+
+    corpus = st.session_state.corpus
+    index  = st.session_state.index
+    stats  = st.session_state.stats
+    cs     = st.session_state.crawl_summary
+    meta   = load_meta()
+
+    # KPI row
+    st.markdown("### 🗂️ Corpus & Index Metrics")
+    avg_len = int(np.mean([len(d["body"].split()) for d in corpus])) if corpus else 0
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📄 Documents",       len(corpus))
+    k2.metric("📚 Vocabulary Size",  len(index))
+    k3.metric("💾 Index Size (KB)",  index_size_kb())
+    k4.metric("📖 Avg Doc Length",   avg_len)
+
+    st.markdown("### ⏱️ Timing Metrics")
+    t1, t2, t3 = st.columns(3)
+    t1.metric("🕷️ Last Crawl Duration",  f"{cs.get('crawl_duration_s', '–')} s")
+    t2.metric("⚙️ Last Index Build",     f"{stats.get('index_build_time_s', '–')} s")
+    latencies = stats.get("search_latencies_ms", [])
+    avg_lat   = round(np.mean(latencies), 1) if latencies else 0
+    t3.metric("🔍 Avg Search Latency",   f"{avg_lat} ms")
+
+    st.markdown("### 🌐 Crawl Statistics")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🌐 URLs Visited",      cs.get("total_visited", "–"))
+    c2.metric("✅ Successful Crawls",  cs.get("successful", "–"))
+    c3.metric("❌ Failed Requests",    cs.get("failed", "–"))
+    c4.metric("🚫 Duplicates Skipped", (cs.get("dup_urls", 0) + cs.get("dup_docs", 0)))
+
+    if corpus:
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.subheader("Document Length Distribution")
+            lengths = [len(d["body"].split()) for d in corpus]
+            fig1 = px.histogram(x=lengths, nbins=15, labels={"x": "Words"},
+                                title="Doc Length Distribution",
+                                color_discrete_sequence=["#2563EB"])
+            st.plotly_chart(fig1, use_container_width=True)
+
+        with col_b:
+            st.subheader("Crawl Depth Distribution")
+            depths = [meta.get(d["id"], {}).get("depth", 0) for d in corpus]
+            depth_df = pd.DataFrame(Counter(depths).items(), columns=["Depth", "Count"]).sort_values("Depth")
+            fig2 = px.bar(depth_df, x="Depth", y="Count",
+                          title="Documents per Crawl Depth",
+                          color_discrete_sequence=["#10B981"])
+            st.plotly_chart(fig2, use_container_width=True)
+
+        if latencies:
+            st.subheader("Search Latency Over Queries")
+            fig3 = px.line(x=list(range(1, len(latencies) + 1)), y=latencies,
+                           labels={"x": "Query #", "y": "Latency (ms)"},
+                           title="Search Latency per Query",
+                           color_discrete_sequence=["#F58518"])
+            fig3.add_hline(y=avg_lat, line_dash="dash", line_color="red",
+                           annotation_text=f"Avg: {avg_lat} ms")
+            st.plotly_chart(fig3, use_container_width=True)
+
+        mode_usage = stats.get("mode_usage", {})
+        if mode_usage:
+            st.subheader("Search Mode Usage")
+            mu_df = pd.DataFrame(mode_usage.items(), columns=["Mode", "Count"])
+            fig4  = px.pie(mu_df, names="Mode", values="Count",
+                           title="Search Mode Usage Distribution")
+            st.plotly_chart(fig4, use_container_width=True)
+
+    else:
+        st.info("No data yet. Crawl documents and run some searches first.")
+
+    footer()
