@@ -536,63 +536,239 @@ This system provides: &nbsp;
 # PAGE 2 – Crawling
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Crawling":
-    st.markdown("<div class='big-title'>🕷️ Web Crawling</div><br>", unsafe_allow_html=True)
+    st.markdown("<div class='big-title'>🕷️ Data Sources</div><br>", unsafe_allow_html=True)
+    st.markdown("Choose one or more sources to populate the corpus.")
 
-    seeds_raw = st.text_area(
-        "Seed URLs (one per line)",
-        value="\n".join([
-            "https://en.wikipedia.org/wiki/Information_retrieval",
-            "https://en.wikipedia.org/wiki/Natural_language_processing",
-            "https://en.wikipedia.org/wiki/Machine_learning",
-            "https://en.wikipedia.org/wiki/Search_engine",
-            "https://en.wikipedia.org/wiki/PageRank",
-        ]),
-        height=150,
-    )
-    col1, col2 = st.columns(2)
-    max_depth = col1.slider("Crawl Depth", 0, 2, 0)
-    max_pages = col2.slider("Max Pages",   5, 50, 10)
+    tab_crawl, tab_csv, tab_api = st.tabs([
+        "☑ Web Crawling",
+        "☑ Upload CSV Dataset",
+        "☑ API (Optional)",
+    ])
 
-    if st.button("🚀 Start Crawling", type="primary"):
-        seeds = [s.strip() for s in seeds_raw.strip().split("\n") if s.strip()]
-        if not seeds:
-            st.error("Please enter at least one seed URL.")
-        else:
-            with st.spinner("Crawling…"):
-                new_docs, new_meta, summary = crawl(seeds, max_depth=max_depth, max_pages=max_pages)
+    # ── Tab 1: Web Crawling ────────────────────────────────────────────────────
+    with tab_crawl:
+        st.subheader("🌐 Web Crawling")
+        st.markdown("Fetch pages from seed URLs. Handles duplicate URLs and duplicate documents automatically.")
 
-            existing_urls = {d["url"] for d in st.session_state.corpus}
-            added = [d for d in new_docs if d["url"] not in existing_urls]
-            base  = len(st.session_state.corpus)
-            for i, d in enumerate(added):
-                d["id"] = f"doc_{base + i}"
+        seeds_raw = st.text_area(
+            "Seed URLs (one per line)",
+            value="\n".join([
+                "https://en.wikipedia.org/wiki/Information_retrieval",
+                "https://en.wikipedia.org/wiki/Natural_language_processing",
+                "https://en.wikipedia.org/wiki/Machine_learning",
+                "https://en.wikipedia.org/wiki/Search_engine",
+                "https://en.wikipedia.org/wiki/PageRank",
+            ]),
+            height=150,
+        )
+        col1, col2 = st.columns(2)
+        max_depth = col1.slider("Crawl Depth", 0, 2, 0,
+                                help="0 = seed pages only; 1 = follow links one level deep")
+        max_pages = col2.slider("Max Pages", 5, 50, 10)
 
-            st.session_state.corpus.extend(added)
-            save_corpus(st.session_state.corpus)
+        if st.button("🚀 Start Crawling", type="primary", key="btn_crawl"):
+            seeds = [s.strip() for s in seeds_raw.strip().split("\n") if s.strip()]
+            if not seeds:
+                st.error("Enter at least one seed URL.")
+            else:
+                with st.spinner("Crawling…"):
+                    new_docs, new_meta, summary = crawl(seeds, max_depth=max_depth, max_pages=max_pages)
 
-            meta = load_meta()
-            meta.update({d["id"]: new_meta.get(d.get("id", ""), {}) for d in added})
-            save_meta(meta)
+                existing_urls = {d["url"] for d in st.session_state.corpus}
+                added = [d for d in new_docs if d["url"] not in existing_urls]
+                base  = len(st.session_state.corpus)
+                for i, d in enumerate(added):
+                    d["id"] = f"doc_{base + i}"
 
-            st.session_state.crawl_summary = summary
+                st.session_state.corpus.extend(added)
+                save_corpus(st.session_state.corpus)
 
-            # Crawl summary card
-            st.success(f"✅ Added **{len(added)}** new documents. Corpus total: **{len(st.session_state.corpus)}**")
-            st.markdown("### 📊 Crawl Summary")
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("🌐 URLs Visited",    summary["total_visited"])
-            s2.metric("✅ Successful",       summary["successful"])
-            s3.metric("❌ Failed",           summary["failed"])
-            s4.metric("🚫 Dup URLs Skipped", summary["dup_urls"])
-            s5, s6, s7 = st.columns(3)
-            s5.metric("📄 Dup Docs Skipped", summary["dup_docs"])
-            s6.metric("📦 Avg Page Size",    f"{summary['avg_page_size_kb']} KB")
-            s7.metric("⏱️ Duration",          f"{summary['crawl_duration_s']} s")
+                meta = load_meta()
+                meta.update({d["id"]: new_meta.get(d.get("id", ""), {}) for d in added})
+                save_meta(meta)
+                st.session_state.crawl_summary = summary
 
+                st.success(f"✅ Added **{len(added)}** new documents. Corpus total: **{len(st.session_state.corpus)}**")
+                st.markdown("### 📊 Crawl Summary")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("🌐 URLs Visited",     summary["total_visited"])
+                s2.metric("✅ Successful",        summary["successful"])
+                s3.metric("❌ Failed",            summary["failed"])
+                s4.metric("🚫 Dup URLs Skipped",  summary["dup_urls"])
+                s5, s6, s7 = st.columns(3)
+                s5.metric("📄 Dup Docs Skipped",  summary["dup_docs"])
+                s6.metric("📦 Avg Page Size",     f"{summary['avg_page_size_kb']} KB")
+                s7.metric("⏱️ Duration",           f"{summary['crawl_duration_s']} s")
+
+    # ── Tab 2: Upload CSV ──────────────────────────────────────────────────────
+    with tab_csv:
+        st.subheader("📂 Upload CSV Dataset")
+        st.markdown("""
+Upload a **CSV file** with at least a text/content column.
+Optionally include `title` and `url` columns — they will be auto-detected.
+
+**Expected columns (flexible):**
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `title` / `headline` / `name` | optional | Document title |
+| `text` / `content` / `body` / `description` / `abstract` | **required** | Main text |
+| `url` / `link` | optional | Source URL |
+        """)
+
+        uploaded = st.file_uploader("Choose a CSV file", type=["csv"])
+        if uploaded:
+            try:
+                df_csv = pd.read_csv(uploaded)
+                st.write(f"**Preview** ({len(df_csv)} rows, {len(df_csv.columns)} columns)")
+                st.dataframe(df_csv.head(5), use_container_width=True)
+
+                # Auto-detect columns
+                cols_lower = {c.lower(): c for c in df_csv.columns}
+                body_candidates  = ["text", "content", "body", "description", "abstract", "article"]
+                title_candidates = ["title", "headline", "name", "subject"]
+                url_candidates   = ["url", "link", "source"]
+
+                body_col  = next((cols_lower[c] for c in body_candidates if c in cols_lower), None)
+                title_col = next((cols_lower[c] for c in title_candidates if c in cols_lower), None)
+                url_col   = next((cols_lower[c] for c in url_candidates   if c in cols_lower), None)
+
+                c1, c2, c3 = st.columns(3)
+                body_col  = c1.selectbox("Text / Body column *", df_csv.columns,
+                                          index=list(df_csv.columns).index(body_col) if body_col else 0)
+                title_col = c2.selectbox("Title column (optional)",
+                                          ["(none)"] + list(df_csv.columns),
+                                          index=(["(none)"] + list(df_csv.columns)).index(title_col) if title_col else 0)
+                url_col   = c3.selectbox("URL column (optional)",
+                                          ["(none)"] + list(df_csv.columns),
+                                          index=(["(none)"] + list(df_csv.columns)).index(url_col) if url_col else 0)
+
+                max_rows = st.slider("Max rows to import", 10, min(5000, len(df_csv)), min(200, len(df_csv)))
+
+                if st.button("📥 Import CSV into Corpus", type="primary", key="btn_csv"):
+                    existing_bodies = {d["body"][:200] for d in st.session_state.corpus}
+                    added_csv, dup_csv = [], 0
+                    base = len(st.session_state.corpus)
+                    meta = load_meta()
+
+                    for i, row in df_csv.head(max_rows).iterrows():
+                        body  = str(row[body_col]).strip()
+                        if not body or body[:200] in existing_bodies:
+                            dup_csv += 1
+                            continue
+                        existing_bodies.add(body[:200])
+
+                        title = str(row[title_col]).strip() if title_col != "(none)" else body[:60]
+                        url   = str(row[url_col]).strip()   if url_col   != "(none)" else f"csv://row_{i}"
+                        doc_id = f"doc_{base + len(added_csv)}"
+
+                        added_csv.append({"id": doc_id, "url": url, "title": title, "body": body[:5000]})
+                        meta[doc_id] = {
+                            "url": url, "title": title, "length": len(body),
+                            "depth": 0, "size_bytes": len(body.encode()),
+                            "crawled_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "source": "csv",
+                        }
+
+                    st.session_state.corpus.extend(added_csv)
+                    save_corpus(st.session_state.corpus)
+                    save_meta(meta)
+
+                    st.success(f"✅ Imported **{len(added_csv)}** documents from CSV. "
+                               f"Skipped **{dup_csv}** duplicates. "
+                               f"Corpus total: **{len(st.session_state.corpus)}**")
+
+            except Exception as e:
+                st.error(f"Failed to read CSV: {e}")
+
+    # ── Tab 3: API ─────────────────────────────────────────────────────────────
+    with tab_api:
+        st.subheader("🔌 API Data Source (Optional)")
+        st.markdown("""
+Fetch articles from a public REST API. The response must return a JSON array or an object
+containing an array of articles. Each article should have a text/description field.
+        """)
+
+        api_url = st.text_input("API Endpoint URL",
+                                placeholder="https://newsapi.org/v2/top-headlines?country=us&apiKey=YOUR_KEY")
+        api_key = st.text_input("API Key (if required)", type="password")
+
+        st.markdown("**Field mapping** — tell the system which JSON keys to use:")
+        fc1, fc2, fc3 = st.columns(3)
+        f_title = fc1.text_input("Title field",   "title")
+        f_body  = fc2.text_input("Body field",    "description")
+        f_url   = fc3.text_input("URL field",     "url")
+        f_root  = st.text_input("Root array key (leave blank if response is already an array)",
+                                "articles",
+                                help="e.g. for NewsAPI the JSON root key containing the list is 'articles'")
+        max_api = st.slider("Max articles to fetch", 5, 100, 20)
+
+        if st.button("🔗 Fetch from API", type="primary", key="btn_api"):
+            if not api_url.strip():
+                st.error("Enter an API endpoint URL.")
+            else:
+                try:
+                    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                    with st.spinner("Fetching from API…"):
+                        resp = requests.get(api_url.strip(), headers=headers, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                    # Navigate to root array
+                    if f_root.strip() and isinstance(data, dict):
+                        data = data.get(f_root.strip(), data)
+                    if isinstance(data, dict):
+                        data = list(data.values())[0] if data else []
+                    if not isinstance(data, list):
+                        st.error("Could not find a list in the API response. Check the root array key.")
+                        st.stop()
+
+                    existing_bodies = {d["body"][:200] for d in st.session_state.corpus}
+                    added_api, dup_api = [], 0
+                    base = len(st.session_state.corpus)
+                    meta = load_meta()
+
+                    for i, item in enumerate(data[:max_api]):
+                        if not isinstance(item, dict):
+                            continue
+                        body  = str(item.get(f_body,  "") or item.get("content", "") or "").strip()
+                        title = str(item.get(f_title, "") or "").strip() or body[:60]
+                        url   = str(item.get(f_url,   "") or f"api://item_{i}").strip()
+
+                        if not body or body[:200] in existing_bodies:
+                            dup_api += 1
+                            continue
+                        existing_bodies.add(body[:200])
+
+                        doc_id = f"doc_{base + len(added_api)}"
+                        added_api.append({"id": doc_id, "url": url, "title": title, "body": body[:5000]})
+                        meta[doc_id] = {
+                            "url": url, "title": title, "length": len(body),
+                            "depth": 0, "size_bytes": len(body.encode()),
+                            "crawled_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "source": "api",
+                        }
+
+                    st.session_state.corpus.extend(added_api)
+                    save_corpus(st.session_state.corpus)
+                    save_meta(meta)
+
+                    st.success(f"✅ Fetched **{len(added_api)}** articles from API. "
+                               f"Skipped **{dup_api}** duplicates. "
+                               f"Corpus total: **{len(st.session_state.corpus)}**")
+
+                except requests.exceptions.RequestException as e:
+                    st.error(f"API request failed: {e}")
+                except Exception as e:
+                    st.error(f"Error processing API response: {e}")
+
+    # ── Shared corpus table ────────────────────────────────────────────────────
+    st.markdown("---")
     if st.session_state.corpus:
-        st.subheader("Crawled Documents")
+        st.subheader(f"📋 Current Corpus ({len(st.session_state.corpus)} documents)")
         meta = load_meta()
         rows = [{"ID": d["id"], "Title": d["title"][:60], "URL": d["url"],
+                 "Source": meta.get(d["id"], {}).get("source", "web"),
                  "Depth": meta.get(d["id"], {}).get("depth", "-"),
                  "Size (KB)": round(meta.get(d["id"], {}).get("size_bytes", len(d["body"])) / 1024, 1),
                  "Crawled At": meta.get(d["id"], {}).get("crawled_at", "-")}
@@ -600,9 +776,9 @@ elif page == "Crawling":
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
         if st.button("🗑️ Clear Corpus"):
-            st.session_state.corpus       = []
-            st.session_state.index        = {}
-            st.session_state.crawl_summary= {}
+            st.session_state.corpus        = []
+            st.session_state.index         = {}
+            st.session_state.crawl_summary = {}
             save_corpus([])
             save_index({})
             st.rerun()
