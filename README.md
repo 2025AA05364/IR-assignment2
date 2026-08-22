@@ -88,27 +88,6 @@ Additional controls: Top K slider, minimum document length filter, sort by score
 - Document length distribution, crawl depth distribution
 - Search latency trend chart, search mode usage pie chart
 
----
-
-## Project Structure
-
-```
-app.py                    - main Streamlit application (~1400 lines)
-requirements.txt          - Python dependencies
-README.md                 - this file
-sample_dataset.csv        - 16 IR/ML articles for offline use
-Group52_Report.docx       - full project report with analysis and inferences
-Group52_Contribution.xlsx - member contribution percentages
-ir_data/                  - auto-created at runtime
-    corpus.json           - crawled documents
-    index.pkl             - inverted index
-    metadata.json         - document metadata (separate from content)
-    ratings.json          - user ratings for collaborative filtering
-    stats.json            - performance statistics
-```
-
----
-
 ## Dependencies
 
 | Package | Purpose |
@@ -122,16 +101,3 @@ ir_data/                  - auto-created at runtime
 | requests | HTTP requests for crawling and API |
 | numpy, pandas | Numerical and data operations |
 
----
-
-## Algorithms Implemented
-
-- **Inverted Index** — posting lists with term frequency counts
-- **TF-IDF** — term frequency × inverse document frequency with cosine similarity ranking
-- **Boolean Retrieval** — set intersection (AND) and union (OR) on posting lists
-- **PageRank** — iterative link analysis on cosine-similarity graph (damping α=0.85)
-- **HITS** — hub and authority score computation via power iteration
-- **Content-Based Filtering** — cosine similarity between document TF-IDF vectors
-- **Collaborative Filtering** — user-user similarity with rating matrix
-- **Naive Bayes** — multinomial NB for document category classification
-- **Evaluation** — Precision, Recall, F1, P@K, R@K, AP/MAP, MRR, DCG/NDCG
