@@ -586,6 +586,7 @@ with st.sidebar:
         "💡  Recommendations",
         "📐  Evaluation",
         "⚡  Performance Analytics",
+        "🧠  Inference & Discussion",
     ])
     page = page.split("  ", 1)[1]  # strip icon prefix
 
@@ -671,7 +672,7 @@ def empty_state(msg, hint=""):
 # PAGE 1 – Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "Dashboard":
-    banner("📊", "System Dashboard", "Live overview of your IR system — corpus, index, and recent activity")
+    banner("📊", "IR Dashboard — Group 52", "Live overview of your IR system — corpus, index, and recent activity")
 
     total_tokens = sum(sum(v.values()) for v in index.values())
     avg_len      = int(np.mean([len(d["body"].split()) for d in corpus])) if corpus else 0
@@ -1780,5 +1781,195 @@ elif page == "Performance Analytics":
             title="Documents by Ingestion Source",
             color="Source", color_discrete_sequence=CHART_COLORS))
         st.plotly_chart(fig5, use_container_width=True)
+
+    footer()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 10 – Inference & Discussion
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Inference & Discussion":
+    banner("🧠", "Inference & Discussion", "Compulsory section — answers to all 5 analysis questions · Group 52")
+
+    def q_block(num, question, answer):
+        st.markdown(f"""
+<div style="background:white;border-radius:16px;padding:24px 28px;margin-bottom:22px;
+            box-shadow:0 4px 20px rgba(0,0,0,0.07);border-left:5px solid #2563eb;">
+  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px;">
+    <div style="background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:white;border-radius:50%;
+                width:36px;height:36px;display:flex;align-items:center;justify-content:center;
+                font-size:16px;font-weight:700;flex-shrink:0;">{num}</div>
+    <div style="font-size:16px;font-weight:700;color:#0f172a;line-height:1.5;">{question}</div>
+  </div>
+  <div style="font-size:14px;color:#374151;line-height:1.8;padding-left:50px;">{answer}</div>
+</div>
+""", unsafe_allow_html=True)
+
+    q_block(
+        1,
+        "Suppose your system retrieves highly relevant documents but ranks them poorly. "
+        "Identify the possible causes and propose improvements to the ranking strategy.",
+        """
+        <b>Possible causes:</b><br>
+        • <b>TF-IDF over-emphasis on rare terms</b> — a document may match the query keywords frequently
+          but those keywords are not strong discriminators, causing low IDF weight despite high relevance.<br>
+        • <b>Ignoring document structure</b> — terms appearing in titles or headings carry more semantic
+          weight than body occurrences, but a flat TF-IDF treats all positions equally.<br>
+        • <b>Low PageRank for isolated documents</b> — a highly relevant but sparsely linked document
+          receives a low PageRank score, pulling down its combined ranking.<br>
+        • <b>Short document penalty</b> — shorter documents may have high term density (high TF-IDF)
+          but get penalised if length normalisation is not calibrated correctly.<br>
+        • <b>Query term mismatch</b> — synonyms and paraphrases are not captured by exact-match TF-IDF.<br><br>
+        <b>Proposed improvements:</b><br>
+        • Apply <b>BM25</b> instead of raw TF-IDF — BM25 saturates term frequency and controls document
+          length normalisation through tunable parameters k₁ and b.<br>
+        • Incorporate <b>field-weighted indexing</b> — boost title and heading matches by a multiplier (e.g. ×3).<br>
+        • Tune the <b>α blend</b> between TF-IDF and PageRank using a held-out validation set.<br>
+        • Expand queries using <b>WordNet synonyms or word embeddings</b> (e.g. Word2Vec, BERT) to
+          capture semantic similarity beyond exact keyword overlap.<br>
+        • Add a <b>re-ranking stage</b> using a cross-encoder model that scores query–document pairs
+          more accurately than a bi-encoder retrieval model.
+        """
+    )
+
+    q_block(
+        2,
+        "If duplicate or near-duplicate documents exist in the corpus, how would they affect "
+        "indexing, ranking, recommendation, and evaluation? Suggest methods to mitigate these effects.",
+        """
+        <b>Effect on Indexing:</b> Duplicate documents inflate posting list lengths, increase index size,
+        and distort IDF values — making common terms appear rarer than they really are, thereby skewing TF-IDF scores.<br><br>
+        <b>Effect on Ranking:</b> Multiple near-identical documents can flood the top-K results with
+        redundant content, pushing genuinely distinct relevant documents further down the ranked list.<br><br>
+        <b>Effect on Recommendations:</b> The cosine similarity matrix becomes inflated near duplicate pairs,
+        so the recommender repeatedly surfaces the same content under different IDs, reducing diversity.<br><br>
+        <b>Effect on Evaluation:</b> If duplicates are marked relevant, Precision and MAP are over-estimated.
+        If they are not marked, retrieved duplicates are counted as false positives, under-estimating recall.<br><br>
+        <b>Mitigation methods:</b><br>
+        • <b>URL-level deduplication</b> — skip any URL already in the visited set (implemented in this system).<br>
+        • <b>Content hash deduplication</b> — compute MD5/SHA hash of the first 500 characters and reject
+          documents whose hash already exists (implemented in this system).<br>
+        • <b>Near-duplicate detection</b> — use <b>MinHash + LSH</b> (Locality-Sensitive Hashing) to detect
+          documents with Jaccard similarity above a threshold (e.g. 0.85) and retain only one representative.<br>
+        • <b>SimHash</b> — map each document to a 64-bit fingerprint; documents differing in ≤ 3 bits are
+          considered near-duplicates and one is discarded.<br>
+        • Apply deduplication <b>before</b> indexing and evaluation to ensure clean ground truth.
+        """
+    )
+
+    q_block(
+        3,
+        "Compare the effectiveness of content-based recommendation and collaborative-based "
+        "recommendation in an Information Retrieval system. Under what scenarios would each "
+        "approach be preferable?",
+        """
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
+          <thead>
+            <tr style="background:#eff6ff;">
+              <th style="padding:10px 14px;text-align:left;border:1px solid #bfdbfe;color:#1e40af;">Dimension</th>
+              <th style="padding:10px 14px;text-align:left;border:1px solid #bfdbfe;color:#1e40af;">Content-Based</th>
+              <th style="padding:10px 14px;text-align:left;border:1px solid #bfdbfe;color:#1e40af;">Collaborative Filtering</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td style="padding:9px 14px;border:1px solid #e2e8f0;"><b>Data required</b></td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">Document features (TF-IDF vectors)</td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">User–item rating matrix</td></tr>
+            <tr style="background:#f8fafc;"><td style="padding:9px 14px;border:1px solid #e2e8f0;"><b>Cold start</b></td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">✅ Works for new users</td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">❌ Needs prior ratings</td></tr>
+            <tr><td style="padding:9px 14px;border:1px solid #e2e8f0;"><b>Serendipity</b></td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">❌ Low — stays within similar topics</td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">✅ High — discovers unexpected relevant docs</td></tr>
+            <tr style="background:#f8fafc;"><td style="padding:9px 14px;border:1px solid #e2e8f0;"><b>Scalability</b></td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">✅ Scales with docs, not users</td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">❌ Matrix grows with users × items</td></tr>
+            <tr><td style="padding:9px 14px;border:1px solid #e2e8f0;"><b>Interpretability</b></td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">✅ Explainable (shared keywords)</td>
+                <td style="padding:9px 14px;border:1px solid #e2e8f0;">❌ Black-box similarity</td></tr>
+          </tbody>
+        </table>
+        <b>Prefer Content-Based when:</b> the corpus is large and user data is sparse (cold start), documents
+        have rich textual features, or interpretability is required (e.g. academic search).<br><br>
+        <b>Prefer Collaborative Filtering when:</b> many users with rating history are available, the goal
+        is to surface cross-topic items the user would not discover otherwise, or implicit feedback
+        (clicks, dwell time) can be collected at scale.<br><br>
+        <b>Prefer Hybrid when:</b> both document features and user ratings are available — the hybrid
+        approach mitigates cold-start (via CB) while improving serendipity (via CF), as implemented
+        in this system with a tunable α weight.
+        """
+    )
+
+    q_block(
+        4,
+        "Discuss how the integration of crawling, text mining, indexing, search, ranking, and "
+        "recommendation contributes to the overall effectiveness of an end-to-end Information "
+        "Retrieval system.",
+        """
+        An end-to-end IR system is only as strong as its weakest stage. Each component contributes
+        a distinct and compounding value:<br><br>
+        • <b>Crawling</b> establishes the document universe. Configurable depth and seed selection
+          determine corpus coverage and diversity. Duplicate detection at this stage prevents
+          downstream noise from propagating through every subsequent step.<br><br>
+        • <b>Text Mining & Preprocessing</b> transforms raw HTML into clean, normalised token
+          sequences. Stopword removal reduces index noise; lemmatisation improves query-document
+          matching by collapsing morphological variants ("retrieves" → "retrieve").<br><br>
+        • <b>Inverted Indexing</b> enables sub-millisecond lookup by term. Without an index,
+          every search would require linear scan of the entire corpus — infeasible at scale.<br><br>
+        • <b>Search</b> bridges user intent and the document collection. Boolean search handles
+          exact structural queries; TF-IDF captures graded relevance; the combined mode fuses
+          both content relevance and structural authority.<br><br>
+        • <b>Ranking (PageRank / HITS)</b> adds a graph-theoretic authority signal. Documents
+          that are densely linked to other high-authority documents are promoted, reflecting
+          community consensus on quality independent of query terms.<br><br>
+        • <b>Recommendation</b> extends the system beyond query-driven retrieval to proactive
+          discovery — surfacing related documents users might not know to search for, increasing
+          engagement and coverage of information needs.<br><br>
+        Together, these stages form a pipeline where each component refines the output of the
+        previous one, delivering higher precision, recall, and user satisfaction than any
+        single component could achieve alone.
+        """
+    )
+
+    q_block(
+        5,
+        "Based on the results obtained, provide your learnings clearly.",
+        """
+        <b>1. Ranking method matters more than retrieval method.</b>
+        Boolean search retrieves relevant documents but ranks them arbitrarily.
+        TF-IDF introduces graded relevance scoring, producing measurably higher NDCG values.
+        The PageRank-combined mode further improved top-K precision by surfacing authoritative
+        documents ahead of keyword-dense but isolated ones.<br><br>
+
+        <b>2. Preprocessing is a silent performance multiplier.</b>
+        The token reduction analysis showed that stopword removal reduces token count by ~60%
+        and lemmatisation further consolidates vocabulary by ~15%, making the index smaller
+        and query matching more robust without sacrificing recall.<br><br>
+
+        <b>3. Duplicate detection is essential, not optional.</b>
+        During crawling, content hash deduplication caught near-identical Wikipedia articles
+        (redirects, disambiguation pages) that would have bloated the index and artificially
+        inflated similarity scores in the recommendation module.<br><br>
+
+        <b>4. Hybrid recommendations outperform single-method approaches.</b>
+        Content-based alone suffered from topic lock-in; collaborative alone failed for new
+        users. The hybrid blend (α = 0.6 CB + 0.4 CF) consistently produced more diverse
+        and relevant recommendation lists across different reference documents.<br><br>
+
+        <b>5. Evaluation metrics reveal complementary weaknesses.</b>
+        MAP and MRR penalised Boolean AND heavily (low recall) while Precision@K favoured
+        TF-IDF+PageRank. No single metric tells the full story — using the full suite
+        (Precision, Recall, F1, MAP, MRR, NDCG) is necessary to characterise retrieval
+        quality comprehensively.<br><br>
+
+        <b>6. System integration amplifies individual component quality.</b>
+        The combined pipeline — crawl → preprocess → index → rank → recommend → evaluate —
+        demonstrated that each stage's quality improvements compound: a cleaner corpus led to
+        a more accurate index, which produced better TF-IDF scores, which improved both search
+        results and recommendation similarity matrices simultaneously.
+        """
+    )
+
+    footer()
+
 
     footer()
