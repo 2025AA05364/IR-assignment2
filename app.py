@@ -1,8 +1,6 @@
-"""
-IR Assignment 2 – Smart End-to-End Information Retrieval System
-Domain: Wikipedia / Web Articles
-Run: streamlit run app.py
-"""
+# IR Assignment 2 - Information Retrieval System
+# Group 52
+# Run: streamlit run app.py
 
 import json
 import math
@@ -33,16 +31,13 @@ from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
 
-APP_VERSION = "2.0.0"
-APP_DOMAIN  = "Wikipedia / Web Articles"
-
 for pkg in ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger", "punkt_tab"]:
     try:
         nltk.download(pkg, quiet=True)
     except Exception:
         pass
 
-# ── Persistence ────────────────────────────────────────────────────────────────
+# Persistence
 DATA_DIR     = "ir_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 CORPUS_FILE  = os.path.join(DATA_DIR, "corpus.json")
@@ -101,7 +96,7 @@ def save_stats(s):
     with open(STATS_FILE, "w") as f:
         json.dump(s, f, indent=2)
 
-# ── Text preprocessing ─────────────────────────────────────────────────────────
+# Text preprocessing
 STOP       = set(stopwords.words("english"))
 stemmer    = PorterStemmer()
 lemmatizer = WordNetLemmatizer()
@@ -131,8 +126,8 @@ def preprocess(text, method="lemmatize"):
 def preprocess_str(text, method="lemmatize"):
     return " ".join(preprocess(text, method))
 
-# ── Crawling ───────────────────────────────────────────────────────────────────
-HEADERS = {"User-Agent": "Mozilla/5.0 (IR-Assignment-Bot/2.0)"}
+# Crawling
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 def crawl(seeds, max_depth=1, max_pages=20):
     visited_urls  = set()
@@ -212,7 +207,7 @@ def crawl(seeds, max_depth=1, max_pages=20):
     }
     return docs, meta, crawl_summary
 
-# ── Indexing ───────────────────────────────────────────────────────────────────
+# Indexing
 def build_inverted_index(docs):
     index = defaultdict(lambda: defaultdict(int))
     for doc in docs:
@@ -231,7 +226,7 @@ def index_size_kb():
         return round(os.path.getsize(INDEX_FILE) / 1024, 1)
     return 0.0
 
-# ── PageRank & HITS ────────────────────────────────────────────────────────────
+# PageRank & HITS
 def build_pagerank(docs):
     G = nx.DiGraph()
     for d in docs:
@@ -251,7 +246,7 @@ def compute_hits(G):
     hubs, authorities = nx.hits(G, max_iter=100, normalized=True)
     return hubs, authorities
 
-# ── Search ─────────────────────────────────────────────────────────────────────
+# Search
 def boolean_search(query, index, docs, op="AND"):
     tokens = preprocess(query)
     if not tokens:
@@ -278,7 +273,7 @@ def ranked_search(query, docs, vec, mat, pr, top_k=10, alpha=0.5):
     ranked   = np.argsort(combined)[::-1][:top_k]
     return [(docs[i], float(combined[i])) for i in ranked if combined[i] > 0]
 
-# ── Recommendations ────────────────────────────────────────────────────────────
+# Recommendations
 CATEGORIES = {
     "ML/AI":    ["machine", "learning", "neural", "deep", "model", "algorithm"],
     "IR/Search":["retrieval", "search", "index", "query", "ranking"],
@@ -324,7 +319,7 @@ def collab_recommend(user_id, ratings, docs, mat, top_k=5):
     doc_map = {d["id"]: d for d in docs}
     return [(doc_map[d_id], score) for d_id, score in ranked_docs if d_id in doc_map]
 
-# ── Evaluation ─────────────────────────────────────────────────────────────────
+# Evaluation
 def compute_metrics(retrieved_ids, relevant_ids, k=10):
     retrieved = list(retrieved_ids)[:k]
     relevant  = set(relevant_ids)
@@ -346,13 +341,12 @@ def compute_metrics(retrieved_ids, relevant_ids, k=10):
             "Precision@K": sum(hits) / k if k else 0, "Recall@K": rec,
             "AP": ap, "MRR": mrr, "NDCG": ndcg}
 
-# ── UI helpers ─────────────────────────────────────────────────────────────────
+# UI helpers
 def footer():
     st.markdown("---")
     st.markdown(
         f"<div style='text-align:center;color:#94a3b8;font-size:13px;'>"
-        f"🚀 Smart IR System &nbsp;|&nbsp; v{APP_VERSION} &nbsp;|&nbsp; "
-        f"Domain: {APP_DOMAIN} &nbsp;|&nbsp; "
+        f"IR Assignment 2 &nbsp;|&nbsp; Group 52 &nbsp;|&nbsp; "
         f"{time.strftime('%Y-%m-%d %H:%M')}"
         f"</div>",
         unsafe_allow_html=True,
@@ -376,9 +370,9 @@ def rec_card(rank, doc, score, category=""):
 </div>
 """, unsafe_allow_html=True)
 
-# ── Page config & global CSS ───────────────────────────────────────────────────
+# Page config & global CSS
 st.set_page_config(
-    page_title="Smart Information Retrieval System",
+    page_title="IR Assignment 2 - Group 52",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -407,7 +401,7 @@ div.stButton>button:hover { background:#1d4ed8; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state ──────────────────────────────────────────────────────────────
+# Session state
 _defaults = {
     "corpus":       load_corpus(),
     "index":        load_index(),
@@ -426,8 +420,8 @@ for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-st.sidebar.markdown("# 🚀 Smart IR\n### Information Retrieval Platform\n---")
+# Sidebar
+st.sidebar.markdown("# IR Assignment 2\n### Group 52\n---")
 
 corpus     = st.session_state.corpus
 index      = st.session_state.index
@@ -455,15 +449,15 @@ page = st.sidebar.radio("Navigation", [
     "Performance Analytics",
 ])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 1 – Dashboard
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 1: Dashboard
+# ---
 if page == "Dashboard":
     left, right = st.columns([4, 1])
     with left:
         st.markdown("""
-<div class='big-title'>🚀 Smart Information Retrieval System</div>
-<div class='sub-title'>End-to-End Information Retrieval Platform</div><br>
+<div class='big-title'>📚 IR Assignment 2 - Information Retrieval System</div>
+<div class='sub-title'>IR Assignment 2 - Group 52</div><br>
 """, unsafe_allow_html=True)
     with right:
         st.success("🟢 Online")
@@ -488,11 +482,7 @@ if page == "Dashboard":
     c8.metric("🔁 Avg Crawl Depth",  avg_depth)
 
     st.info("""
-### 👋 Welcome
-This system provides: &nbsp;
-✅ Intelligent Crawling &nbsp; ✅ Text Mining &nbsp; ✅ Index Management &nbsp;
-✅ Search Engine &nbsp; ✅ PageRank / HITS Ranking &nbsp;
-✅ Recommendation System &nbsp; ✅ Evaluation Metrics &nbsp; ✅ Performance Analytics
+Web crawling, text preprocessing, inverted index, TF-IDF search, PageRank, HITS, recommendations, and evaluation metrics - all in one Streamlit app.
 """)
 
     if corpus:
@@ -532,9 +522,9 @@ This system provides: &nbsp;
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 2 – Crawling
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 2: Crawling
+# ---
 elif page == "Crawling":
     st.markdown("<div class='big-title'>🕷️ Data Sources</div><br>", unsafe_allow_html=True)
     st.markdown("Choose one or more sources to populate the corpus.")
@@ -545,7 +535,7 @@ elif page == "Crawling":
         "☑ API (Optional)",
     ])
 
-    # ── Tab 1: Web Crawling ────────────────────────────────────────────────────
+    # Tab 1: Web Crawling
     with tab_crawl:
         st.subheader("🌐 Web Crawling")
         st.markdown("Fetch pages from seed URLs. Handles duplicate URLs and duplicate documents automatically.")
@@ -600,7 +590,7 @@ elif page == "Crawling":
                 s6.metric("📦 Avg Page Size",     f"{summary['avg_page_size_kb']} KB")
                 s7.metric("⏱️ Duration",           f"{summary['crawl_duration_s']} s")
 
-    # ── Tab 2: Upload CSV ──────────────────────────────────────────────────────
+    # Tab 2: Upload CSV
     with tab_csv:
         st.subheader("📂 Upload CSV Dataset")
         st.markdown("""
@@ -653,7 +643,10 @@ Optionally include `title` and `url` columns — they will be auto-detected.
 
                     for i, row in df_csv.head(max_rows).iterrows():
                         body  = str(row[body_col]).strip()
-                        if not body or body[:200] in existing_bodies:
+                        # Edge case: skip NaN / null / empty cells
+                        if (not body
+                                or body.lower() in ("nan", "none", "null", "na", "n/a", "")
+                                or body[:200] in existing_bodies):
                             dup_csv += 1
                             continue
                         existing_bodies.add(body[:200])
@@ -681,7 +674,7 @@ Optionally include `title` and `url` columns — they will be auto-detected.
             except Exception as e:
                 st.error(f"Failed to read CSV: {e}")
 
-    # ── Tab 3: API ─────────────────────────────────────────────────────────────
+    # Tab 3: API
     with tab_api:
         st.subheader("🔌 API Data Source (Optional)")
         st.markdown("""
@@ -762,7 +755,7 @@ containing an array of articles. Each article should have a text/description fie
                 except Exception as e:
                     st.error(f"Error processing API response: {e}")
 
-    # ── Shared corpus table ────────────────────────────────────────────────────
+    # Shared corpus table
     st.markdown("---")
     if st.session_state.corpus:
         st.subheader(f"📋 Current Corpus ({len(st.session_state.corpus)} documents)")
@@ -785,9 +778,9 @@ containing an array of articles. Each article should have a text/description fie
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 3 – Index Management
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 3: Index Management
+# ---
 elif page == "Index Management":
     st.markdown("<div class='big-title'>🗂️ Index Management</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -798,12 +791,17 @@ elif page == "Index Management":
         if st.button("⚙️ Build / Rebuild Index", type="primary"):
             t0 = time.time()
             with st.spinner("Building inverted index & TF-IDF…"):
-                idx = build_inverted_index(corpus)
-                st.session_state.index = idx
-                save_index(idx)
-                vec, mat = build_tfidf(corpus)
-                st.session_state.tfidf_vec = vec
-                st.session_state.tfidf_mat = mat
+                try:
+                    idx = build_inverted_index(corpus)
+                    st.session_state.index = idx
+                    save_index(idx)
+                    vec, mat = build_tfidf(corpus)
+                    st.session_state.tfidf_vec = vec
+                    st.session_state.tfidf_mat = mat
+                except ValueError as e:
+                    st.error(f"❌ Index build failed: {e}. "
+                             "Ensure documents contain sufficient non-stopword text.")
+                    st.stop()
 
             t1 = time.time()
             with st.spinner("Computing PageRank & HITS…"):
@@ -849,9 +847,9 @@ elif page == "Index Management":
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 4 – Text Mining
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 4: Text Mining
+# ---
 elif page == "Text Mining":
     st.markdown("<div class='big-title'>⛏️ Text Mining & Preprocessing</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -895,6 +893,10 @@ elif page == "Text Mining":
                 doc_idx2 = st.selectbox("Document", range(len(corpus)),
                                         format_func=lambda i: corpus[i]["title"][:60],
                                         key="kw_doc")
+                if doc_idx2 >= mat.shape[0]:
+                    st.warning("⚠️ This document was added after the last index build. "
+                               "Go to **Index Management → Build / Rebuild Index** first.")
+                    st.stop()
                 row     = mat[doc_idx2].toarray().flatten()
                 top_idx = row.argsort()[::-1][:20]
                 words   = vec.get_feature_names_out()
@@ -919,7 +921,9 @@ elif page == "Text Mining":
             if st.session_state.tfidf_mat is None:
                 st.info("ℹ️ Build the index first.")
             else:
-                labels = [auto_label(d) for d in corpus]
+                # Use only docs covered by the current TF-IDF matrix (stale-index safety)
+                indexed_corpus = corpus[:st.session_state.tfidf_mat.shape[0]]
+                labels = [auto_label(d) for d in indexed_corpus]
                 lc_df  = pd.DataFrame(Counter(labels).items(), columns=["Category", "Count"])
                 fig = px.pie(lc_df, names="Category", values="Count",
                              title="Auto-labeled Category Distribution")
@@ -940,9 +944,9 @@ elif page == "Text Mining":
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 5 – Search
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 5: Search
+# ---
 elif page == "Search":
     st.markdown("<div class='big-title'>🔎 Search Interface</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -956,6 +960,15 @@ elif page == "Search":
         # Example queries
         with st.expander("💡 Example queries"):
             st.markdown("`information retrieval` &nbsp; `machine learning algorithm` &nbsp; `web search ranking` &nbsp; `natural language processing` &nbsp; `PageRank link analysis`")
+
+        # Edge case: warn if index is stale (corpus grew since last build)
+        if (st.session_state.tfidf_mat is not None
+                and st.session_state.tfidf_mat.shape[0] != len(corpus)):
+            st.warning(
+                f"⚠️ Index is stale: built on "
+                f"**{st.session_state.tfidf_mat.shape[0]}** docs but corpus now has "
+                f"**{len(corpus)}** docs. Go to **Index Management → Build / Rebuild Index** "
+                f"before searching for accurate results.")
 
         query = st.text_input("Enter your query", "information retrieval")
         c1, c2, c3, c4 = st.columns(4)
@@ -1040,9 +1053,9 @@ elif page == "Search":
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 6 – Ranking Visualization
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 6: Ranking Visualization
+# ---
 elif page == "Ranking Visualization":
     st.markdown("<div class='big-title'>📈 Ranking Visualization</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -1115,13 +1128,15 @@ elif page == "Ranking Visualization":
                 if query_r:
                     vec = st.session_state.tfidf_vec
                     mat = st.session_state.tfidf_mat
+                    # Align to mat rows to prevent shape mismatch when index is stale
+                    indexed_docs  = corpus[:mat.shape[0]]
                     tfidf_scores  = cosine_similarity(vec.transform([preprocess_str(query_r)]), mat).flatten()
-                    pr_scores_raw = np.array([pr.get(d["id"], 0) for d in corpus])
+                    pr_scores_raw = np.array([pr.get(d["id"], 0) for d in indexed_docs])
                     pr_norm       = pr_scores_raw / pr_scores_raw.max() if pr_scores_raw.max() > 0 else pr_scores_raw
                     combined      = 0.5 * tfidf_scores + 0.5 * pr_norm
 
                     comp_df = pd.DataFrame({
-                        "Document":  [d["title"][:40] for d in corpus],
+                        "Document":  [d["title"][:40] for d in indexed_docs],
                         "TF-IDF":    tfidf_scores,
                         "PageRank":  pr_norm,
                         "Combined":  combined,
@@ -1144,9 +1159,9 @@ score higher — reducing the risk of surfacing obscure but keyword-dense pages 
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 7 – Recommendations
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 7: Recommendations
+# ---
 elif page == "Recommendations":
     st.markdown("<div class='big-title'>💡 Recommendation Panel</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -1248,9 +1263,9 @@ elif page == "Recommendations":
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 8 – Evaluation
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 8: Evaluation
+# ---
 elif page == "Evaluation":
     st.markdown("<div class='big-title'>📐 Evaluation Dashboard</div><br>", unsafe_allow_html=True)
     corpus = st.session_state.corpus
@@ -1345,9 +1360,9 @@ both query relevance and document authority.
 
     footer()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE 9 – Performance Analytics
-# ─────────────────────────────────────────────────────────────────────────────
+# ---
+# PAGE 9: Performance Analytics
+# ---
 elif page == "Performance Analytics":
     st.markdown("<div class='big-title'>⚡ Performance Analytics</div><br>", unsafe_allow_html=True)
 
