@@ -456,8 +456,8 @@ if page == "Dashboard":
     left, right = st.columns([4, 1])
     with left:
         st.markdown("""
-<div class='big-title'>📚 IR Assignment 2 - Information Retrieval System</div>
-<div class='sub-title'>IR Assignment 2 - Group 52</div><br>
+<div class='big-title'>📚 IR Assignment 2</div>
+<div class='sub-title'>Information Retrieval System &nbsp;|&nbsp; Group 52</div><br>
 """, unsafe_allow_html=True)
     with right:
         st.success("🟢 Online")
