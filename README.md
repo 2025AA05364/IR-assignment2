@@ -1,5 +1,5 @@
 # IR Assignment 2 - Information Retrieval System
-**Group 52** | BITS Pilani MTech | Semester 2 2025-26
+**Group 52** | BITS Pilani MTech 
 
 A complete end-to-end Information Retrieval system built with Python and Streamlit. Covers web crawling, text preprocessing, inverted index, TF-IDF, PageRank, HITS, recommendations, and evaluation metrics.
 
